@@ -31,6 +31,23 @@ mise install
 pnpm build
 ```
 
+## Package for macOS
+
+```sh
+mise install
+pnpm install
+pnpm dist:mac
+```
+
+Artifacts are written to `release/`.
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Pushing a version tag publishes the macOS artifacts to GitHub Releases.
+
 ## Notes
 
 - node-pty may require rebuild for Electron.
