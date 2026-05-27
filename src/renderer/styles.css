@@ -1,0 +1,206 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #111315;
+  color: #d6d8dc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #111315;
+}
+
+button {
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-rows: 40px minmax(0, 1fr);
+  width: 100vw;
+  height: 100vh;
+  min-width: 640px;
+  min-height: 380px;
+  background: #111315;
+}
+
+.tab-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  align-items: stretch;
+  border-bottom: 1px solid #252a30;
+  background: #171a1f;
+}
+
+.tabs {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  min-width: 132px;
+  max-width: 220px;
+  height: 39px;
+  border-right: 1px solid #252a30;
+}
+
+.tab-select {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 39px;
+  flex: 1;
+  padding: 0 8px 0 12px;
+  border: 0;
+  color: #aeb5bf;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tab-item:hover {
+  background: #20252b;
+}
+
+.tab-item:hover .tab-select,
+.tab-item:hover .tab-close {
+  color: #f0f3f6;
+}
+
+.tab-item.is-active {
+  background: #111315;
+}
+
+.tab-item.is-active .tab-select {
+  color: #ffffff;
+}
+
+.tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-close {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin: 0 8px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: #8d96a3;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tab-close:hover {
+  color: #ffffff;
+  background: #333a43;
+}
+
+.new-tab-button {
+  width: 40px;
+  height: 39px;
+  border: 0;
+  border-left: 1px solid #252a30;
+  color: #cdd3da;
+  background: #171a1f;
+  cursor: pointer;
+}
+
+.new-tab-button:hover {
+  color: #ffffff;
+  background: #20252b;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.command-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border-right: 1px solid #252a30;
+  background: #15181d;
+}
+
+.panel-title {
+  padding: 0 2px 4px;
+  color: #858e99;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.quick-commands {
+  display: grid;
+  gap: 6px;
+}
+
+.quick-command-button {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  overflow: hidden;
+  border: 1px solid #2b3139;
+  border-radius: 6px;
+  color: #d6d8dc;
+  background: #1c2026;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.quick-command-button:hover {
+  border-color: #3f8cff;
+  color: #ffffff;
+  background: #232932;
+}
+
+.terminal-host {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: #111315;
+}
+
+.terminal-pane {
+  position: absolute;
+  inset: 0;
+  display: none;
+  padding: 10px;
+}
+
+.terminal-pane.is-active {
+  display: block;
+}
+
+.terminal-pane .xterm {
+  width: 100%;
+  height: 100%;
+}
+
+.terminal-pane .xterm-viewport {
+  background: transparent;
+}

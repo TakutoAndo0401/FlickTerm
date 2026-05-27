@@ -1,0 +1,33 @@
+{
+  "name": "flickterm",
+  "version": "0.1.0",
+  "description": "A lightweight Electron terminal built with xterm.js and node-pty.",
+  "main": "./out/main/main.js",
+  "type": "module",
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "postinstall": "electron-rebuild -f -w node-pty",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit",
+    "rebuild": "electron-rebuild -f -w node-pty"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "node-pty"
+    ]
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
+    "electron": "^36.4.0",
+    "electron-vite": "^3.1.0",
+    "typescript": "^5.8.3"
+  }
+}

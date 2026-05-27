@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FlickTerm</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="tab-bar" aria-label="Terminal tabs">
+        <div id="tabs" class="tabs"></div>
+        <button id="new-tab-button" class="new-tab-button" type="button" title="New tab">+</button>
+      </header>
+      <main class="workspace">
+        <aside class="command-panel" aria-label="Quick commands">
+          <div class="panel-title">Commands</div>
+          <div id="quick-commands" class="quick-commands"></div>
+        </aside>
+        <section id="terminal-host" class="terminal-host" aria-label="Terminal"></section>
+      </main>
+    </div>
+    <script type="module" src="/renderer.ts"></script>
+  </body>
+</html>
