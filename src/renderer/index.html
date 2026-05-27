@@ -17,11 +17,64 @@
       </header>
       <main class="workspace">
         <aside class="command-panel" aria-label="Quick commands">
-          <div class="panel-title">Commands</div>
+          <div id="settings-notice" class="settings-notice" role="status"></div>
+          <div class="panel-header">
+            <div class="panel-title">Commands</div>
+            <button id="settings-button" class="panel-icon-button" type="button" title="Settings">Settings</button>
+          </div>
           <div id="quick-commands" class="quick-commands"></div>
         </aside>
         <section id="terminal-host" class="terminal-host" aria-label="Terminal"></section>
       </main>
+      <div id="settings-overlay" class="settings-overlay" aria-hidden="true">
+        <section
+          id="settings-dialog"
+          class="settings-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="settings-title"
+          tabindex="-1"
+        >
+          <header class="settings-header">
+            <h2 id="settings-title">Settings</h2>
+            <button id="settings-close-button" class="settings-close-button" type="button" title="Close">x</button>
+          </header>
+          <div class="settings-tabs" role="tablist">
+            <button class="settings-tab is-active" type="button" data-settings-tab="commands">Commands</button>
+            <button class="settings-tab" type="button" data-settings-tab="shortcuts">Shortcuts</button>
+          </div>
+          <div id="settings-status" class="settings-status" role="status"></div>
+          <div id="settings-commands-panel" class="settings-panel is-active">
+            <div class="settings-toolbar">
+              <button id="add-command-button" class="settings-primary-button" type="button">Add Command</button>
+              <button id="reset-commands-button" class="settings-secondary-button" type="button">Reset Commands</button>
+            </div>
+            <div class="command-editor-header">
+              <span>Label</span>
+              <span>Command</span>
+              <span>Mode</span>
+              <span></span>
+            </div>
+            <div id="commands-editor" class="commands-editor"></div>
+          </div>
+          <div id="settings-shortcuts-panel" class="settings-panel">
+            <div class="settings-toolbar">
+              <button id="reset-shortcuts-button" class="settings-secondary-button" type="button">Reset Shortcuts</button>
+            </div>
+            <div class="shortcut-editor-header">
+              <span>Action</span>
+              <span>Scope</span>
+              <span>Shortcut</span>
+              <span></span>
+            </div>
+            <div id="shortcuts-editor" class="shortcuts-editor"></div>
+          </div>
+          <footer class="settings-footer">
+            <button id="cancel-settings-button" class="settings-secondary-button" type="button">Cancel</button>
+            <button id="save-settings-button" class="settings-primary-button" type="button">Save</button>
+          </footer>
+        </section>
+      </div>
     </div>
     <script type="module" src="/renderer.ts"></script>
   </body>

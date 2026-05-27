@@ -1,18 +1,71 @@
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
-import { loadQuickCommands } from "./quickCommands";
 import { createTerminalView, type RendererTerminalTab } from "./terminalTabs";
-import type { QuickCommand, TerminalTab } from "../shared/terminalTypes";
+import type {
+  AppSettings,
+  AppSettingsSnapshot,
+  QuickCommand,
+  QuickCommandRunMode,
+  ShortcutBinding,
+  ShortcutScope,
+  TerminalTab
+} from "../shared/terminalTypes";
+
+type ShortcutAction = {
+  id: string;
+  label: string;
+  hint?: string;
+  defaultScope: ShortcutScope;
+};
+
+type ValidationResult = {
+  valid: boolean;
+  messages: string[];
+};
 
 const tabsElement = getElement("tabs");
 const newTabButton = getElement("new-tab-button") as HTMLButtonElement;
+const settingsButton = getElement("settings-button") as HTMLButtonElement;
 const quickCommandsElement = getElement("quick-commands");
 const terminalHost = getElement("terminal-host");
+const settingsOverlay = getElement("settings-overlay");
+const settingsDialog = getElement("settings-dialog");
+const settingsCloseButton = getElement("settings-close-button") as HTMLButtonElement;
+const settingsTabs = Array.from(document.querySelectorAll<HTMLButtonElement>(".settings-tab"));
+const settingsCommandsPanel = getElement("settings-commands-panel");
+const settingsShortcutsPanel = getElement("settings-shortcuts-panel");
+const settingsStatusElement = getElement("settings-status");
+const settingsNoticeElement = getElement("settings-notice");
+const commandsEditorElement = getElement("commands-editor");
+const shortcutsEditorElement = getElement("shortcuts-editor");
+const addCommandButton = getElement("add-command-button") as HTMLButtonElement;
+const resetCommandsButton = getElement("reset-commands-button") as HTMLButtonElement;
+const resetShortcutsButton = getElement("reset-shortcuts-button") as HTMLButtonElement;
+const cancelSettingsButton = getElement("cancel-settings-button") as HTMLButtonElement;
+const saveSettingsButton = getElement("save-settings-button") as HTMLButtonElement;
+
+const fixedShortcutActions: ShortcutAction[] = [
+  { id: "toggleVisibility", label: "Toggle Visibility", defaultScope: "global" },
+  { id: "newTab", label: "New Tab", defaultScope: "app" },
+  { id: "closeTab", label: "Close Tab", defaultScope: "app" },
+  { id: "nextTab", label: "Next Tab", defaultScope: "app" },
+  { id: "previousTab", label: "Previous Tab", defaultScope: "app" },
+  ...Array.from({ length: 9 }, (_, index) => ({
+    id: `selectTab:${index + 1}`,
+    label: `Select Tab ${index + 1}`,
+    defaultScope: "app" as const
+  }))
+];
 
 const tabs = new Map<string, RendererTerminalTab>();
 let activeTabId: string | null = null;
 let tabCounter = 0;
 let resizeTimer: number | undefined;
+let settingsSnapshot: AppSettingsSnapshot | null = null;
+let appSettings: AppSettings | null = null;
+let draftSettings: AppSettings | null = null;
+let settingsTab: "commands" | "shortcuts" = "commands";
+let recordingActionId: string | null = null;
 
 window.terminalApi.onTerminalData(({ id, data }) => {
   tabs.get(id)?.terminal.write(data);
@@ -28,9 +81,127 @@ window.terminalApi.onTerminalExit(({ id, exitCode }) => {
   view.terminal.writeln(`[process exited with code ${exitCode}]`);
 });
 
+window.terminalApi.onShortcutTriggered((actionId) => {
+  runShortcutAction(actionId);
+});
+
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (recordingActionId) {
+      handleShortcutRecording(event);
+      return;
+    }
+
+    if (event.key === "Escape" && isSettingsOpen()) {
+      event.preventDefault();
+      closeSettingsWithConfirmation();
+      return;
+    }
+
+    if (isSettingsOpen()) {
+      return;
+    }
+
+    const actionId = getAppShortcutActionId(event);
+    if (!actionId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    runShortcutAction(actionId);
+  },
+  true
+);
+
 newTabButton.addEventListener("click", () => {
   createTab().catch((error) => {
     console.error("Failed to create tab", error);
+  });
+});
+
+settingsButton.addEventListener("click", () => {
+  openSettings();
+});
+
+settingsCloseButton.addEventListener("click", () => {
+  closeSettingsWithConfirmation();
+});
+
+settingsOverlay.addEventListener("click", (event) => {
+  if (event.target === settingsOverlay) {
+    closeSettingsWithConfirmation();
+  }
+});
+
+for (const tabButton of settingsTabs) {
+  tabButton.addEventListener("click", () => {
+    const tab = tabButton.dataset.settingsTab;
+    if (tab === "commands" || tab === "shortcuts") {
+      settingsTab = tab;
+      renderSettingsModal();
+    }
+  });
+}
+
+addCommandButton.addEventListener("click", () => {
+  if (!draftSettings) {
+    return;
+  }
+
+  draftSettings.commands.push({
+    id: `cmd_${crypto.randomUUID()}`,
+    label: "New command",
+    command: "",
+    runMode: "send"
+  });
+  renderSettingsModal();
+});
+
+resetCommandsButton.addEventListener("click", () => {
+  if (!draftSettings || !settingsSnapshot) {
+    return;
+  }
+
+  if (!window.confirm("Reset Commands to defaults?")) {
+    return;
+  }
+
+  const defaultCommandIds = new Set(settingsSnapshot.defaults.commands.map((command) => command.id));
+  draftSettings.commands = cloneSettings(settingsSnapshot.defaults).commands;
+  draftSettings.shortcuts = Object.fromEntries(
+    Object.entries(draftSettings.shortcuts).filter(([actionId]) => {
+      if (!actionId.startsWith("runCommand:")) {
+        return true;
+      }
+
+      return defaultCommandIds.has(actionId.slice("runCommand:".length));
+    })
+  );
+  renderSettingsModal();
+});
+
+resetShortcutsButton.addEventListener("click", () => {
+  if (!draftSettings || !settingsSnapshot) {
+    return;
+  }
+
+  if (!window.confirm("Reset Shortcuts to defaults?")) {
+    return;
+  }
+
+  draftSettings.shortcuts = cloneSettings(settingsSnapshot.defaults).shortcuts;
+  renderSettingsModal();
+});
+
+cancelSettingsButton.addEventListener("click", () => {
+  closeSettingsWithConfirmation();
+});
+
+saveSettingsButton.addEventListener("click", () => {
+  saveSettings().catch((error) => {
+    showSettingsStatus(error instanceof Error ? error.message : "Failed to save settings.", true);
   });
 });
 
@@ -44,8 +215,15 @@ init().catch((error) => {
 });
 
 async function init(): Promise<void> {
-  await renderQuickCommands();
+  await reloadSettings();
+  renderQuickCommands();
   await createTab();
+}
+
+async function reloadSettings(): Promise<void> {
+  settingsSnapshot = await window.terminalApi.getAppSettings();
+  appSettings = cloneSettings(settingsSnapshot.settings);
+  showSettingsNotice(settingsSnapshot.notice ?? "");
 }
 
 async function createTab(): Promise<void> {
@@ -103,6 +281,14 @@ function activateTab(id: string): void {
   renderTabs();
 }
 
+function closeActiveTab(): void {
+  if (!activeTabId) {
+    return;
+  }
+
+  closeTab(activeTabId);
+}
+
 function closeTab(id: string): void {
   const view = tabs.get(id);
   if (!view) {
@@ -127,6 +313,31 @@ function closeTab(id: string): void {
     }
   } else {
     renderTabs();
+  }
+}
+
+function activateRelativeTab(direction: 1 | -1): void {
+  const ids = Array.from(tabs.keys());
+  if (!activeTabId || ids.length === 0) {
+    return;
+  }
+
+  const currentIndex = ids.indexOf(activeTabId);
+  if (currentIndex === -1) {
+    return;
+  }
+
+  const nextIndex = (currentIndex + direction + ids.length) % ids.length;
+  const nextId = ids[nextIndex];
+  if (nextId) {
+    activateTab(nextId);
+  }
+}
+
+function activateTabAt(index: number): void {
+  const id = Array.from(tabs.keys())[index];
+  if (id) {
+    activateTab(id);
   }
 }
 
@@ -155,7 +366,7 @@ function renderTabs(): void {
     closeButton.className = "tab-close";
     closeButton.title = "Close tab";
     closeButton.textContent = "x";
-    closeButton.addEventListener("click", (event) => {
+    closeButton.addEventListener("click", () => {
       closeTab(id);
     });
 
@@ -165,11 +376,10 @@ function renderTabs(): void {
   }
 }
 
-async function renderQuickCommands(): Promise<void> {
-  const commands = await loadQuickCommands();
+function renderQuickCommands(): void {
   quickCommandsElement.replaceChildren();
 
-  for (const command of commands) {
+  for (const command of appSettings?.commands ?? []) {
     quickCommandsElement.append(createQuickCommandButton(command));
   }
 }
@@ -181,17 +391,546 @@ function createQuickCommandButton(command: QuickCommand): HTMLButtonElement {
   button.textContent = command.label;
   button.title = command.command;
   button.addEventListener("click", () => {
-    if (!activeTabId) {
-      return;
-    }
-
-    window.terminalApi.writeTerminal({
-      id: activeTabId,
-      data: `${command.command}\r`
-    });
+    runCommand(command);
   });
 
   return button;
+}
+
+function runCommand(command: QuickCommand): void {
+  if (!activeTabId) {
+    return;
+  }
+
+  if (command.runMode === "confirm" && !window.confirm(`Run this command?\n${command.command}`)) {
+    return;
+  }
+
+  window.terminalApi.writeTerminal({
+    id: activeTabId,
+    data: command.runMode === "insert" ? command.command : `${command.command}\r`
+  });
+}
+
+function runShortcutAction(actionId: string): void {
+  if (actionId === "toggleVisibility") {
+    window.terminalApi.toggleVisibility();
+    return;
+  }
+
+  if (actionId === "newTab") {
+    createTab().catch((error) => {
+      console.error("Failed to create tab", error);
+    });
+    return;
+  }
+
+  if (actionId === "closeTab") {
+    closeActiveTab();
+    return;
+  }
+
+  if (actionId === "nextTab") {
+    activateRelativeTab(1);
+    return;
+  }
+
+  if (actionId === "previousTab") {
+    activateRelativeTab(-1);
+    return;
+  }
+
+  if (actionId.startsWith("selectTab:")) {
+    const index = Number(actionId.slice("selectTab:".length)) - 1;
+    if (Number.isInteger(index)) {
+      activateTabAt(index);
+    }
+    return;
+  }
+
+  if (actionId.startsWith("runCommand:")) {
+    const commandId = actionId.slice("runCommand:".length);
+    const command = appSettings?.commands.find((item) => item.id === commandId);
+    if (command) {
+      runCommand(command);
+    }
+  }
+}
+
+function getAppShortcutActionId(event: KeyboardEvent): string | null {
+  const accelerator = eventToAccelerator(event);
+  if (!accelerator || !appSettings) {
+    return null;
+  }
+
+  for (const [actionId, binding] of Object.entries(appSettings.shortcuts)) {
+    if (binding.scope === "app" && binding.accelerator === accelerator) {
+      return actionId;
+    }
+  }
+
+  return null;
+}
+
+function openSettings(): void {
+  if (!appSettings) {
+    return;
+  }
+
+  draftSettings = cloneSettings(appSettings);
+  recordingActionId = null;
+  settingsTab = "commands";
+  showSettingsStatus("", false);
+  settingsOverlay.classList.add("is-open");
+  settingsOverlay.setAttribute("aria-hidden", "false");
+  renderSettingsModal();
+  settingsDialog.focus();
+}
+
+function closeSettingsWithConfirmation(): void {
+  if (!isSettingsOpen()) {
+    return;
+  }
+
+  if (hasUnsavedChanges() && !window.confirm("Discard unsaved settings changes?")) {
+    return;
+  }
+
+  closeSettings();
+}
+
+function closeSettings(): void {
+  recordingActionId = null;
+  draftSettings = null;
+  settingsOverlay.classList.remove("is-open");
+  settingsOverlay.setAttribute("aria-hidden", "true");
+}
+
+function isSettingsOpen(): boolean {
+  return settingsOverlay.classList.contains("is-open");
+}
+
+function renderSettingsModal(): void {
+  if (!draftSettings) {
+    return;
+  }
+
+  for (const tabButton of settingsTabs) {
+    tabButton.classList.toggle("is-active", tabButton.dataset.settingsTab === settingsTab);
+  }
+
+  settingsCommandsPanel.classList.toggle("is-active", settingsTab === "commands");
+  settingsShortcutsPanel.classList.toggle("is-active", settingsTab === "shortcuts");
+  renderCommandEditor();
+  renderShortcutEditor();
+  updateSaveState();
+}
+
+function renderCommandEditor(): void {
+  if (!draftSettings) {
+    return;
+  }
+
+  commandsEditorElement.replaceChildren();
+
+  for (const command of draftSettings.commands) {
+    const row = document.createElement("div");
+    row.className = "command-editor-row";
+
+    const labelInput = createTextInput(command.label, "Label");
+    labelInput.addEventListener("input", () => {
+      command.label = labelInput.value;
+      renderShortcutEditor();
+      updateSaveState();
+    });
+
+    const commandInput = createTextInput(command.command, "Command");
+    commandInput.addEventListener("input", () => {
+      command.command = commandInput.value;
+      updateSaveState();
+    });
+
+    const runModeSelect = document.createElement("select");
+    runModeSelect.className = "settings-select";
+    for (const [value, label] of [
+      ["send", "Run"],
+      ["insert", "Insert"],
+      ["confirm", "Confirm"]
+    ] satisfies Array<[QuickCommandRunMode, string]>) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      runModeSelect.append(option);
+    }
+    runModeSelect.value = command.runMode;
+    runModeSelect.addEventListener("change", () => {
+      command.runMode = runModeSelect.value as QuickCommandRunMode;
+      updateSaveState();
+    });
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "settings-danger-button";
+    deleteButton.textContent = "Delete";
+    deleteButton.addEventListener("click", () => {
+      if (!draftSettings || !window.confirm(`Delete "${command.label}"?`)) {
+        return;
+      }
+
+      draftSettings.commands = draftSettings.commands.filter((item) => item.id !== command.id);
+      delete draftSettings.shortcuts[`runCommand:${command.id}`];
+      renderSettingsModal();
+    });
+
+    row.append(labelInput, commandInput, runModeSelect, deleteButton);
+    commandsEditorElement.append(row);
+  }
+}
+
+function renderShortcutEditor(): void {
+  if (!draftSettings) {
+    return;
+  }
+
+  shortcutsEditorElement.replaceChildren();
+
+  for (const action of getShortcutActions(draftSettings)) {
+    const binding = getBinding(draftSettings, action);
+    const row = document.createElement("div");
+    row.className = "shortcut-editor-row";
+
+    const label = document.createElement("div");
+    label.className = "shortcut-action-label";
+    label.textContent = action.label;
+    if (action.hint) {
+      label.title = action.hint;
+    }
+
+    const scopeSelect = document.createElement("select");
+    scopeSelect.className = "settings-select";
+    for (const scope of ["app", "global", "disabled"] satisfies ShortcutScope[]) {
+      const option = document.createElement("option");
+      option.value = scope;
+      option.textContent = scope;
+      scopeSelect.append(option);
+    }
+    scopeSelect.value = binding.scope;
+    scopeSelect.addEventListener("change", () => {
+      if (!draftSettings) {
+        return;
+      }
+
+      draftSettings.shortcuts[action.id] = {
+        ...binding,
+        scope: scopeSelect.value as ShortcutScope
+      };
+      renderShortcutEditor();
+      updateSaveState();
+    });
+
+    const recordButton = document.createElement("button");
+    recordButton.type = "button";
+    recordButton.className = "shortcut-record-button";
+    recordButton.dataset.actionId = action.id;
+    recordButton.textContent =
+      recordingActionId === action.id
+        ? "Press keys..."
+        : binding.accelerator
+          ? displayAccelerator(binding.accelerator)
+          : "Unassigned";
+    recordButton.addEventListener("click", () => {
+      recordingActionId = action.id;
+      renderShortcutEditor();
+    });
+
+    const clearButton = document.createElement("button");
+    clearButton.type = "button";
+    clearButton.className = "settings-secondary-button";
+    clearButton.textContent = "Clear";
+    clearButton.addEventListener("click", () => {
+      if (!draftSettings) {
+        return;
+      }
+
+      draftSettings.shortcuts[action.id] = {
+        accelerator: "",
+        scope: "disabled"
+      };
+      renderShortcutEditor();
+      updateSaveState();
+    });
+
+    row.append(label, scopeSelect, recordButton, clearButton);
+    shortcutsEditorElement.append(row);
+  }
+}
+
+function handleShortcutRecording(event: KeyboardEvent): void {
+  event.preventDefault();
+  event.stopPropagation();
+
+  if (!recordingActionId || !draftSettings) {
+    return;
+  }
+
+  if (event.key === "Escape") {
+    recordingActionId = null;
+    renderShortcutEditor();
+    return;
+  }
+
+  if (event.key === "Backspace" || event.key === "Delete") {
+    draftSettings.shortcuts[recordingActionId] = {
+      accelerator: "",
+      scope: "disabled"
+    };
+    recordingActionId = null;
+    renderSettingsModal();
+    return;
+  }
+
+  const accelerator = eventToAccelerator(event);
+  if (!accelerator) {
+    showSettingsStatus("Shortcut must include Cmd/Ctrl or Alt.", true);
+    return;
+  }
+
+  const previous = draftSettings.shortcuts[recordingActionId];
+  draftSettings.shortcuts[recordingActionId] = {
+    accelerator,
+    scope: previous?.scope === "disabled" ? "app" : (previous?.scope ?? "app")
+  };
+  recordingActionId = null;
+  renderSettingsModal();
+}
+
+async function saveSettings(): Promise<void> {
+  if (!draftSettings) {
+    return;
+  }
+
+  const validation = validateSettings(draftSettings);
+  if (!validation.valid) {
+    showSettingsStatus(validation.messages.join(" "), true);
+    updateSaveState();
+    return;
+  }
+
+  const snapshot = await window.terminalApi.saveAppSettings(draftSettings);
+  settingsSnapshot = snapshot;
+  appSettings = cloneSettings(snapshot.settings);
+  draftSettings = cloneSettings(snapshot.settings);
+  renderQuickCommands();
+  renderSettingsModal();
+  showSettingsNotice(snapshot.notice ?? "");
+
+  if (snapshot.globalShortcutErrors.length > 0) {
+    showSettingsStatus(snapshot.globalShortcutErrors.map((error) => error.message).join(" "), true);
+    return;
+  }
+
+  showSettingsStatus("Settings saved.", false);
+}
+
+function validateSettings(settings: AppSettings): ValidationResult {
+  const messages: string[] = [];
+  const commandIds = new Set<string>();
+
+  for (const command of settings.commands) {
+    if (command.label.trim().length === 0) {
+      messages.push("Command labels cannot be empty.");
+    }
+
+    if (command.command.trim().length === 0) {
+      messages.push(`Command "${command.label || "Untitled"}" cannot be empty.`);
+    }
+
+    if (commandIds.has(command.id)) {
+      messages.push(`Duplicate command id: ${command.id}.`);
+    }
+    commandIds.add(command.id);
+  }
+
+  const actions = getShortcutActions(settings);
+  const actionLabels = new Map(actions.map((action) => [action.id, action.label]));
+  const assigned = new Map<string, string>();
+
+  for (const action of actions) {
+    const binding = getBinding(settings, action);
+    if (binding.scope === "disabled" || binding.accelerator.length === 0) {
+      continue;
+    }
+
+    const existing = assigned.get(binding.accelerator);
+    if (existing) {
+      messages.push(
+        `${displayAccelerator(binding.accelerator)} is already assigned to ${actionLabels.get(existing) ?? existing}.`
+      );
+      continue;
+    }
+
+    assigned.set(binding.accelerator, action.id);
+  }
+
+  return {
+    valid: messages.length === 0,
+    messages
+  };
+}
+
+function updateSaveState(): void {
+  if (!draftSettings) {
+    saveSettingsButton.disabled = true;
+    return;
+  }
+
+  const validation = validateSettings(draftSettings);
+  saveSettingsButton.disabled = !validation.valid;
+
+  if (!validation.valid) {
+    showSettingsStatus(validation.messages[0] ?? "Settings are invalid.", true);
+  } else if (settingsStatusElement.classList.contains("is-error")) {
+    showSettingsStatus("", false);
+  }
+}
+
+function getShortcutActions(settings: AppSettings): ShortcutAction[] {
+  return [
+    ...fixedShortcutActions,
+    ...settings.commands.map((command) => ({
+      id: `runCommand:${command.id}`,
+      label: `Run Command: ${command.label}`,
+      hint: command.command,
+      defaultScope: "app" as const
+    }))
+  ];
+}
+
+function getBinding(settings: AppSettings, action: ShortcutAction): ShortcutBinding {
+  return (
+    settings.shortcuts[action.id] ?? {
+      accelerator: "",
+      scope: action.defaultScope
+    }
+  );
+}
+
+function eventToAccelerator(event: KeyboardEvent): string | null {
+  if (event.key === "Meta" || event.key === "Control" || event.key === "Alt" || event.key === "Shift") {
+    return null;
+  }
+
+  const key = normalizeKey(event);
+  if (!key) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  if (event.metaKey || event.ctrlKey) {
+    parts.push("CmdOrCtrl");
+  }
+  if (event.altKey) {
+    parts.push("Alt");
+  }
+  if (event.shiftKey) {
+    parts.push("Shift");
+  }
+
+  if (!parts.includes("CmdOrCtrl") && !parts.includes("Alt")) {
+    return null;
+  }
+
+  parts.push(key);
+  return parts.join("+");
+}
+
+function normalizeKey(event: KeyboardEvent): string | null {
+  const codeMap: Record<string, string> = {
+    BracketLeft: "[",
+    BracketRight: "]",
+    Minus: "-",
+    Equal: "=",
+    Comma: ",",
+    Period: ".",
+    Slash: "/",
+    Semicolon: ";",
+    Quote: "'",
+    Backquote: "`"
+  };
+  const codeKey = codeMap[event.code];
+  if (codeKey) {
+    return codeKey;
+  }
+
+  const key = event.key;
+
+  if (key.length === 1 && /^[a-z]$/i.test(key)) {
+    return key.toUpperCase();
+  }
+
+  if (key.length === 1 && /^[0-9]$/.test(key)) {
+    return key;
+  }
+
+  const keyMap: Record<string, string> = {
+    " ": "Space",
+    Spacebar: "Space",
+    Enter: "Enter",
+    Tab: "Tab",
+    ArrowUp: "Up",
+    ArrowDown: "Down",
+    ArrowLeft: "Left",
+    ArrowRight: "Right",
+    "[": "[",
+    "]": "]",
+    "-": "-",
+    "=": "=",
+    ",": ",",
+    ".": ".",
+    "/": "/",
+    ";": ";",
+    "'": "'",
+    "`": "`"
+  };
+
+  return keyMap[key] ?? null;
+}
+
+function displayAccelerator(accelerator: string): string {
+  const isMac = navigator.platform.toLowerCase().includes("mac");
+  return accelerator.replace("CmdOrCtrl", isMac ? "Cmd" : "Ctrl");
+}
+
+function showSettingsStatus(message: string, isError: boolean): void {
+  settingsStatusElement.textContent = message;
+  settingsStatusElement.classList.toggle("is-error", isError);
+}
+
+function showSettingsNotice(message: string): void {
+  settingsNoticeElement.textContent = message;
+  settingsNoticeElement.classList.toggle("is-visible", message.length > 0);
+}
+
+function hasUnsavedChanges(): boolean {
+  return Boolean(draftSettings && appSettings && JSON.stringify(draftSettings) !== JSON.stringify(appSettings));
+}
+
+function cloneSettings(settings: AppSettings): AppSettings {
+  return {
+    commands: settings.commands.map((command) => ({ ...command })),
+    shortcuts: Object.fromEntries(
+      Object.entries(settings.shortcuts).map(([actionId, binding]) => [actionId, { ...binding }])
+    )
+  };
+}
+
+function createTextInput(value: string, placeholder: string): HTMLInputElement {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "settings-input";
+  input.value = value;
+  input.placeholder = placeholder;
+  return input;
 }
 
 function scheduleFitActiveTerminal(): void {

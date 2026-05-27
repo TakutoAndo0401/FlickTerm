@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
+  AppSettings,
+  AppSettingsSnapshot,
   CreateTerminalRequest,
   CreateTerminalResponse,
   QuickCommand,
@@ -14,6 +16,11 @@ import type {
 const terminalApi: TerminalApi = {
   getQuickCommands: () => ipcRenderer.invoke("quickCommands:list") as Promise<QuickCommand[]>,
 
+  getAppSettings: () => ipcRenderer.invoke("settings:get") as Promise<AppSettingsSnapshot>,
+
+  saveAppSettings: (settings: AppSettings) =>
+    ipcRenderer.invoke("settings:save", settings) as Promise<AppSettingsSnapshot>,
+
   createTerminal: (request: CreateTerminalRequest) =>
     ipcRenderer.invoke("terminal:create", request) as Promise<CreateTerminalResponse>,
 
@@ -27,6 +34,21 @@ const terminalApi: TerminalApi = {
 
   killTerminal: (request: TerminalKillRequest) => {
     ipcRenderer.send("terminal:kill", request);
+  },
+
+  toggleVisibility: () => {
+    ipcRenderer.send("window:toggleVisibility");
+  },
+
+  onShortcutTriggered: (callback: (actionId: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, actionId: string): void => {
+      callback(actionId);
+    };
+
+    ipcRenderer.on("shortcut:triggered", listener);
+    return () => {
+      ipcRenderer.removeListener("shortcut:triggered", listener);
+    };
   },
 
   onTerminalData: (callback: (event: TerminalDataEvent) => void) => {

@@ -144,12 +144,55 @@ button {
   background: #15181d;
 }
 
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .panel-title {
   padding: 0 2px 4px;
   color: #858e99;
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
+}
+
+.panel-icon-button {
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid #2b3139;
+  border-radius: 5px;
+  color: #aeb5bf;
+  background: #1c2026;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.panel-icon-button:hover {
+  color: #ffffff;
+  border-color: #3f8cff;
+  background: #232932;
+}
+
+.settings-notice {
+  display: none;
+  padding: 8px;
+  border: 1px solid #634f1e;
+  border-radius: 6px;
+  color: #f0d28a;
+  background: #211b11;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settings-notice.is-visible {
+  display: block;
 }
 
 .quick-commands {
@@ -203,4 +246,242 @@ button {
 
 .terminal-pane .xterm-viewport {
   background: transparent;
+}
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: none;
+  place-items: center;
+  padding: 28px;
+  background: rgb(0 0 0 / 55%);
+}
+
+.settings-overlay.is-open {
+  display: grid;
+}
+
+.settings-dialog {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  width: min(880px, calc(100vw - 56px));
+  max-height: min(720px, calc(100vh - 56px));
+  overflow: hidden;
+  border: 1px solid #2d333b;
+  border-radius: 8px;
+  outline: none;
+  background: #171a1f;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 45%);
+}
+
+.settings-header,
+.settings-footer,
+.settings-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-header {
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid #252a30;
+}
+
+.settings-header h2 {
+  margin: 0;
+  color: #f0f3f6;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.settings-close-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: #aeb5bf;
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-close-button:hover {
+  color: #ffffff;
+  background: #2a3038;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 16px 0;
+}
+
+.settings-tab {
+  min-width: 96px;
+  height: 32px;
+  border: 1px solid #2b3139;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  color: #aeb5bf;
+  background: #1c2026;
+  cursor: pointer;
+}
+
+.settings-tab.is-active {
+  color: #ffffff;
+  background: #20252b;
+}
+
+.settings-status {
+  min-height: 26px;
+  padding: 6px 16px;
+  color: #9fb8d9;
+  font-size: 12px;
+}
+
+.settings-status.is-error {
+  color: #ffb1a8;
+}
+
+.settings-panel {
+  display: none;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 16px 16px;
+}
+
+.settings-panel.is-active {
+  display: block;
+}
+
+.settings-toolbar {
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.command-editor-header,
+.command-editor-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.9fr) minmax(240px, 1.8fr) 104px 76px;
+  gap: 8px;
+  align-items: center;
+}
+
+.shortcut-editor-header,
+.shortcut-editor-row {
+  display: grid;
+  grid-template-columns: minmax(200px, 1.2fr) 112px minmax(160px, 0.9fr) 76px;
+  gap: 8px;
+  align-items: center;
+}
+
+.command-editor-header,
+.shortcut-editor-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 0;
+  color: #858e99;
+  background: #171a1f;
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.commands-editor,
+.shortcuts-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.command-editor-row,
+.shortcut-editor-row {
+  min-height: 36px;
+}
+
+.settings-input,
+.settings-select,
+.shortcut-record-button {
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  border: 1px solid #2b3139;
+  border-radius: 6px;
+  color: #e3e7ec;
+  background: #111315;
+}
+
+.settings-input {
+  padding: 0 9px;
+}
+
+.settings-input:focus,
+.settings-select:focus,
+.shortcut-record-button:focus {
+  border-color: #3f8cff;
+  outline: none;
+}
+
+.settings-select {
+  padding: 0 8px;
+}
+
+.shortcut-action-label {
+  min-width: 0;
+  overflow: hidden;
+  color: #d6d8dc;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcut-record-button {
+  padding: 0 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-primary-button,
+.settings-secondary-button,
+.settings-danger-button {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #2f3742;
+  border-radius: 6px;
+  color: #d6d8dc;
+  background: #20252b;
+  cursor: pointer;
+}
+
+.settings-primary-button {
+  border-color: #2f69c7;
+  color: #ffffff;
+  background: #2563c7;
+}
+
+.settings-primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.settings-secondary-button:hover,
+.settings-danger-button:hover,
+.settings-primary-button:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.settings-danger-button {
+  padding: 0 10px;
+  border-color: #553235;
+  color: #ffb1a8;
+  background: #2a181b;
+}
+
+.settings-footer {
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid #252a30;
 }

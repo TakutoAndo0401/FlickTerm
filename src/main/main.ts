@@ -1,11 +1,13 @@
 import { app, BrowserWindow, globalShortcut, ipcMain } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appConfig, quickCommands } from "./config";
 import { PtyManager } from "./ptyManager";
+import { SettingsStore } from "./settingsStore";
 import type {
+  AppSettings,
   CreateTerminalRequest,
   CreateTerminalResponse,
+  ShortcutRegistrationError,
   TerminalKillRequest,
   TerminalResizeRequest,
   TerminalWriteRequest
@@ -23,8 +25,13 @@ const ptyManager = new PtyManager({
     sendToRenderer("terminal:exit", event);
   }
 });
+const settingsStore = new SettingsStore();
+let globalShortcutErrors: ShortcutRegistrationError[] = [];
 
-function sendToRenderer(channel: "terminal:data" | "terminal:exit", payload: unknown): void {
+function sendToRenderer(
+  channel: "terminal:data" | "terminal:exit" | "shortcut:triggered",
+  payload: unknown
+): void {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
     return;
   }
@@ -69,7 +76,15 @@ function createWindow(): void {
 }
 
 function registerIpc(): void {
-  ipcMain.handle("quickCommands:list", () => quickCommands);
+  ipcMain.handle("quickCommands:list", () => settingsStore.getSettings().commands);
+
+  ipcMain.handle("settings:get", () => settingsStore.getSnapshot(globalShortcutErrors));
+
+  ipcMain.handle("settings:save", async (_event, settings: AppSettings) => {
+    await settingsStore.save(settings);
+    registerGlobalShortcuts();
+    return settingsStore.getSnapshot(globalShortcutErrors);
+  });
 
   ipcMain.handle(
     "terminal:create",
@@ -90,33 +105,61 @@ function registerIpc(): void {
   ipcMain.on("terminal:kill", (_event, request: TerminalKillRequest) => {
     ptyManager.kill(request.id);
   });
+
+  ipcMain.on("window:toggleVisibility", () => {
+    toggleWindowVisibility();
+  });
 }
 
-function registerToggleShortcut(): void {
-  const registered = globalShortcut.register(appConfig.toggleShortcut, () => {
-    if (!mainWindow) {
-      createWindow();
-      return;
+function toggleWindowVisibility(): void {
+  if (!mainWindow) {
+    createWindow();
+    return;
+  }
+
+  if (mainWindow.isVisible()) {
+    mainWindow.hide();
+    return;
+  }
+
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function registerGlobalShortcuts(): void {
+  globalShortcut.unregisterAll();
+  globalShortcutErrors = [];
+
+  for (const [actionId, binding] of Object.entries(settingsStore.getSettings().shortcuts)) {
+    if (binding.scope !== "global" || binding.accelerator.length === 0) {
+      continue;
     }
 
-    if (mainWindow.isVisible()) {
-      mainWindow.hide();
-      return;
+    const registered = globalShortcut.register(binding.accelerator, () => {
+      if (actionId === "toggleVisibility") {
+        toggleWindowVisibility();
+        return;
+      }
+
+      sendToRenderer("shortcut:triggered", actionId);
+    });
+
+    if (!registered) {
+      globalShortcutErrors.push({
+        actionId,
+        accelerator: binding.accelerator,
+        message: `Could not register global shortcut: ${binding.accelerator}.`
+      });
+      console.warn(`Failed to register global shortcut: ${binding.accelerator}`);
     }
-
-    mainWindow.show();
-    mainWindow.focus();
-  });
-
-  if (!registered) {
-    console.warn(`Failed to register global shortcut: ${appConfig.toggleShortcut}`);
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await settingsStore.load();
   registerIpc();
   createWindow();
-  registerToggleShortcut();
+  registerGlobalShortcuts();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

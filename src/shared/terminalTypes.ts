@@ -6,8 +6,37 @@ export type TerminalTab = {
 };
 
 export type QuickCommand = {
+  id: string;
   label: string;
   command: string;
+  runMode: QuickCommandRunMode;
+};
+
+export type QuickCommandRunMode = "send" | "insert" | "confirm";
+
+export type ShortcutScope = "global" | "app" | "disabled";
+
+export type ShortcutBinding = {
+  accelerator: string;
+  scope: ShortcutScope;
+};
+
+export type AppSettings = {
+  commands: QuickCommand[];
+  shortcuts: Record<string, ShortcutBinding>;
+};
+
+export type ShortcutRegistrationError = {
+  actionId: string;
+  accelerator: string;
+  message: string;
+};
+
+export type AppSettingsSnapshot = {
+  settings: AppSettings;
+  defaults: AppSettings;
+  globalShortcutErrors: ShortcutRegistrationError[];
+  notice?: string;
 };
 
 export type CreateTerminalRequest = {
@@ -51,10 +80,14 @@ export type TerminalExitEvent = {
 
 export type TerminalApi = {
   getQuickCommands: () => Promise<QuickCommand[]>;
+  getAppSettings: () => Promise<AppSettingsSnapshot>;
+  saveAppSettings: (settings: AppSettings) => Promise<AppSettingsSnapshot>;
   createTerminal: (request: CreateTerminalRequest) => Promise<CreateTerminalResponse>;
   writeTerminal: (request: TerminalWriteRequest) => void;
   resizeTerminal: (request: TerminalResizeRequest) => void;
   killTerminal: (request: TerminalKillRequest) => void;
+  toggleVisibility: () => void;
+  onShortcutTriggered: (callback: (actionId: string) => void) => () => void;
   onTerminalData: (callback: (event: TerminalDataEvent) => void) => () => void;
   onTerminalExit: (callback: (event: TerminalExitEvent) => void) => () => void;
 };
