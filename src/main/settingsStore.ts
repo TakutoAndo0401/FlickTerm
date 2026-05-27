@@ -1,7 +1,7 @@
 import { app } from "electron";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { defaultSettings } from "./config";
+import { appConfig, defaultSettings } from "./config";
 import type {
   AppSettings,
   AppSettingsSnapshot,
@@ -90,10 +90,12 @@ function normalizeSettings(value: unknown): AppSettings {
   const commands = normalizeCommands(value.commands);
   const commandIds = new Set(commands.map((command) => command.id));
   const shortcuts = normalizeShortcuts(value.shortcuts, commandIds);
+  const layout = normalizeLayout(value.layout);
 
   return {
     commands,
-    shortcuts
+    shortcuts,
+    layout
   };
 }
 
@@ -174,6 +176,29 @@ function normalizeShortcutBinding(value: unknown): ShortcutBinding {
   };
 }
 
+function normalizeLayout(value: unknown): AppSettings["layout"] {
+  if (!isRecord(value)) {
+    return cloneLayout(defaultSettings.layout);
+  }
+
+  return {
+    commandPanelWidth: clampNumber(
+      value.commandPanelWidth,
+      appConfig.minCommandPanelWidth,
+      appConfig.maxCommandPanelWidth,
+      defaultSettings.layout.commandPanelWidth
+    )
+  };
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
 async function backupInvalidSettings(filePath: string): Promise<void> {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
   const backupPath = path.join(path.dirname(filePath), `settings.invalid-${stamp}.json`);
@@ -196,7 +221,14 @@ function cloneSettings(settings: AppSettings): AppSettings {
     commands: settings.commands.map((command) => ({ ...command })),
     shortcuts: Object.fromEntries(
       Object.entries(settings.shortcuts).map(([actionId, binding]) => [actionId, { ...binding }])
-    )
+    ),
+    layout: cloneLayout(settings.layout)
+  };
+}
+
+function cloneLayout(layout: AppSettings["layout"]): AppSettings["layout"] {
+  return {
+    commandPanelWidth: layout.commandPanelWidth
   };
 }
 

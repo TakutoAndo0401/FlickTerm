@@ -21,9 +21,14 @@ export type ShortcutBinding = {
   scope: ShortcutScope;
 };
 
+export type LayoutSettings = {
+  commandPanelWidth: number;
+};
+
 export type AppSettings = {
   commands: QuickCommand[];
   shortcuts: Record<string, ShortcutBinding>;
+  layout: LayoutSettings;
 };
 
 export type ShortcutRegistrationError = {

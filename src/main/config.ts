@@ -4,7 +4,10 @@ export const appConfig = {
   defaultShell: "/bin/zsh",
   toggleShortcut: "Alt+Space",
   initialCols: 80,
-  initialRows: 24
+  initialRows: 24,
+  defaultCommandPanelWidth: 168,
+  minCommandPanelWidth: 120,
+  maxCommandPanelWidth: 360
 } as const;
 
 export const defaultQuickCommands: QuickCommand[] = [
@@ -87,5 +90,8 @@ export const defaultSettings: AppSettings = {
       accelerator: "CmdOrCtrl+9",
       scope: "app"
     }
+  },
+  layout: {
+    commandPanelWidth: appConfig.defaultCommandPanelWidth
   }
 };

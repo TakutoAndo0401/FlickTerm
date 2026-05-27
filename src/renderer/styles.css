@@ -129,12 +129,15 @@ button {
 }
 
 .workspace {
+  --command-panel-width: 168px;
+
   display: grid;
-  grid-template-columns: 168px minmax(0, 1fr);
+  grid-template-columns: var(--command-panel-width) minmax(0, 1fr);
   min-height: 0;
 }
 
 .command-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -142,6 +145,39 @@ button {
   padding: 12px;
   border-right: 1px solid #252a30;
   background: #15181d;
+}
+
+.panel-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  z-index: 2;
+  width: 8px;
+  outline: none;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.panel-resize-handle::after {
+  position: absolute;
+  top: 0;
+  right: 3px;
+  bottom: 0;
+  width: 1px;
+  content: "";
+  background: transparent;
+}
+
+.panel-resize-handle:hover::after,
+.panel-resize-handle:focus-visible::after,
+.workspace.is-resizing-panel .panel-resize-handle::after {
+  background: #3f8cff;
+}
+
+.workspace.is-resizing-panel,
+.workspace.is-resizing-panel * {
+  user-select: none;
 }
 
 .panel-header {

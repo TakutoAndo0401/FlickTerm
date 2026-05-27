@@ -15,7 +15,7 @@
         <div id="tabs" class="tabs"></div>
         <button id="new-tab-button" class="new-tab-button" type="button" title="New tab">+</button>
       </header>
-      <main class="workspace">
+      <main id="workspace" class="workspace">
         <aside class="command-panel" aria-label="Quick commands">
           <div id="settings-notice" class="settings-notice" role="status"></div>
           <div class="panel-header">
@@ -23,6 +23,16 @@
             <button id="settings-button" class="panel-icon-button" type="button" title="Settings">Settings</button>
           </div>
           <div id="quick-commands" class="quick-commands"></div>
+          <div
+            id="command-panel-resize-handle"
+            class="panel-resize-handle"
+            role="separator"
+            aria-label="Resize command panel"
+            aria-orientation="vertical"
+            aria-valuemin="120"
+            aria-valuemax="360"
+            tabindex="0"
+          ></div>
         </aside>
         <section id="terminal-host" class="terminal-host" aria-label="Terminal"></section>
       </main>

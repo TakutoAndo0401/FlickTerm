@@ -25,8 +25,10 @@ type ValidationResult = {
 
 const tabsElement = getElement("tabs");
 const newTabButton = getElement("new-tab-button") as HTMLButtonElement;
+const workspaceElement = getElement("workspace");
 const settingsButton = getElement("settings-button") as HTMLButtonElement;
 const quickCommandsElement = getElement("quick-commands");
+const commandPanelResizeHandle = getElement("command-panel-resize-handle");
 const terminalHost = getElement("terminal-host");
 const settingsOverlay = getElement("settings-overlay");
 const settingsDialog = getElement("settings-dialog");
@@ -57,10 +59,23 @@ const fixedShortcutActions: ShortcutAction[] = [
   }))
 ];
 
+const commandPanelWidthDefault = 168;
+const commandPanelWidthMin = 120;
+const commandPanelWidthMax = 360;
+const commandPanelKeyboardStep = 10;
+
 const tabs = new Map<string, RendererTerminalTab>();
 let activeTabId: string | null = null;
 let tabCounter = 0;
 let resizeTimer: number | undefined;
+let commandPanelWidth = commandPanelWidthDefault;
+let commandPanelResizeState:
+  | {
+      pointerId: number;
+      startX: number;
+      startWidth: number;
+    }
+  | undefined;
 let settingsSnapshot: AppSettingsSnapshot | null = null;
 let appSettings: AppSettings | null = null;
 let draftSettings: AppSettings | null = null;
@@ -123,6 +138,62 @@ newTabButton.addEventListener("click", () => {
 
 settingsButton.addEventListener("click", () => {
   openSettings();
+});
+
+commandPanelResizeHandle.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) {
+    return;
+  }
+
+  event.preventDefault();
+  commandPanelResizeState = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startWidth: commandPanelWidth
+  };
+  commandPanelResizeHandle.setPointerCapture(event.pointerId);
+  workspaceElement.classList.add("is-resizing-panel");
+});
+
+commandPanelResizeHandle.addEventListener("pointermove", (event) => {
+  if (!commandPanelResizeState || event.pointerId !== commandPanelResizeState.pointerId) {
+    return;
+  }
+
+  const nextWidth = commandPanelResizeState.startWidth + event.clientX - commandPanelResizeState.startX;
+  setCommandPanelWidth(nextWidth);
+});
+
+commandPanelResizeHandle.addEventListener("pointerup", (event) => {
+  finishCommandPanelResize(event.pointerId);
+});
+
+commandPanelResizeHandle.addEventListener("pointercancel", (event) => {
+  finishCommandPanelResize(event.pointerId);
+});
+
+commandPanelResizeHandle.addEventListener("keydown", (event) => {
+  let nextWidth: number | undefined;
+
+  if (event.key === "ArrowLeft") {
+    nextWidth = commandPanelWidth - commandPanelKeyboardStep;
+  } else if (event.key === "ArrowRight") {
+    nextWidth = commandPanelWidth + commandPanelKeyboardStep;
+  } else if (event.key === "Home") {
+    nextWidth = commandPanelWidthMin;
+  } else if (event.key === "End") {
+    nextWidth = commandPanelWidthMax;
+  }
+
+  if (nextWidth === undefined) {
+    return;
+  }
+
+  event.preventDefault();
+  setCommandPanelWidth(nextWidth);
+  saveCommandPanelWidth().catch((error) => {
+    console.error("Failed to save command panel width", error);
+  });
 });
 
 settingsCloseButton.addEventListener("click", () => {
@@ -223,6 +294,7 @@ async function init(): Promise<void> {
 async function reloadSettings(): Promise<void> {
   settingsSnapshot = await window.terminalApi.getAppSettings();
   appSettings = cloneSettings(settingsSnapshot.settings);
+  setCommandPanelWidth(appSettings.layout.commandPanelWidth);
   showSettingsNotice(settingsSnapshot.notice ?? "");
 }
 
@@ -382,6 +454,45 @@ function renderQuickCommands(): void {
   for (const command of appSettings?.commands ?? []) {
     quickCommandsElement.append(createQuickCommandButton(command));
   }
+}
+
+function setCommandPanelWidth(width: number): void {
+  commandPanelWidth = clamp(width, commandPanelWidthMin, commandPanelWidthMax);
+  workspaceElement.style.setProperty("--command-panel-width", `${commandPanelWidth}px`);
+  commandPanelResizeHandle.setAttribute("aria-valuenow", String(commandPanelWidth));
+
+  if (appSettings) {
+    appSettings.layout.commandPanelWidth = commandPanelWidth;
+  }
+}
+
+async function saveCommandPanelWidth(): Promise<void> {
+  if (!appSettings) {
+    return;
+  }
+
+  const snapshot = await window.terminalApi.saveAppSettings(appSettings);
+  settingsSnapshot = snapshot;
+  appSettings = cloneSettings(snapshot.settings);
+  setCommandPanelWidth(appSettings.layout.commandPanelWidth);
+  showSettingsNotice(snapshot.notice ?? "");
+}
+
+function finishCommandPanelResize(pointerId: number): void {
+  if (!commandPanelResizeState || pointerId !== commandPanelResizeState.pointerId) {
+    return;
+  }
+
+  commandPanelResizeState = undefined;
+  workspaceElement.classList.remove("is-resizing-panel");
+
+  if (commandPanelResizeHandle.hasPointerCapture(pointerId)) {
+    commandPanelResizeHandle.releasePointerCapture(pointerId);
+  }
+
+  saveCommandPanelWidth().catch((error) => {
+    console.error("Failed to save command panel width", error);
+  });
 }
 
 function createQuickCommandButton(command: QuickCommand): HTMLButtonElement {
@@ -920,8 +1031,15 @@ function cloneSettings(settings: AppSettings): AppSettings {
     commands: settings.commands.map((command) => ({ ...command })),
     shortcuts: Object.fromEntries(
       Object.entries(settings.shortcuts).map(([actionId, binding]) => [actionId, { ...binding }])
-    )
+    ),
+    layout: {
+      commandPanelWidth: settings.layout.commandPanelWidth
+    }
   };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
 }
 
 function createTextInput(value: string, placeholder: string): HTMLInputElement {
