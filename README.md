@@ -63,11 +63,6 @@ or:
 pnpm exec electron-rebuild -f -w node-pty
 ```
 
-- Default shell is zsh (`/bin/zsh`).
-- Toggle shortcut is `Alt+Space` by default.
-- The shortcut can conflict with the OS or window manager. Registration failure is logged and does not crash the app.
-- Shell paths and native build prerequisites can differ between macOS, Linux, and Windows.
-- The first version intentionally does not include a theme editor, settings screen, session restore, AI features, cloud sync, or plugins.
 
 ## Structure
 
