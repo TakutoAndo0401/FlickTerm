@@ -38,8 +38,6 @@ jobs:
 
       - name: Build macOS app bundle
         run: pnpm build
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Archive macOS app bundle
         run: ditto -c -k --keepParent src-tauri/target/release/bundle/macos/FlickTerm.app FlickTerm-${GITHUB_REF_NAME}-macos.app.zip
