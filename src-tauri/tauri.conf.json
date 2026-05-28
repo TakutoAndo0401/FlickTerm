@@ -27,10 +27,19 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "icon": [],
     "macOS": {
       "signingIdentity": "-"
     },
     "targets": ["app"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU5RjY5MTM5QTM3OENCNDYKUldSR3kzaWpPWkgyNmFjSGxKRVNqd1NoWmJqTVVwV2JLWDZKNG5wZk5yU3hFZVRhTnlKalIyYUEK",
+      "endpoints": [
+        "https://github.com/TakutoAndo0401/FlickTerm/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

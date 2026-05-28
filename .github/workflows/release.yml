@@ -38,16 +38,59 @@ jobs:
 
       - name: Build macOS app bundle
         run: pnpm build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Archive macOS app bundle
         run: ditto -c -k --keepParent src-tauri/target/release/bundle/macos/FlickTerm.app FlickTerm-${GITHUB_REF_NAME}-macos.app.zip
+
+      - name: Prepare updater artifacts
+        run: |
+          set -euo pipefail
+
+          arch="$(uname -m)"
+          if [ "$arch" = "arm64" ]; then
+            platform="darwin-aarch64"
+          else
+            platform="darwin-x86_64"
+          fi
+
+          artifact="$(find src-tauri/target/release/bundle/macos -name '*.app.tar.gz' -print -quit)"
+          if [ -z "$artifact" ]; then
+            echo "No updater artifact was generated." >&2
+            exit 1
+          fi
+
+          signature="${artifact}.sig"
+          if [ ! -f "$signature" ]; then
+            echo "No updater signature was generated at $signature." >&2
+            exit 1
+          fi
+
+          release_artifact="FlickTerm-${GITHUB_REF_NAME}-${platform}.app.tar.gz"
+          cp "$artifact" "$release_artifact"
+          cp "$signature" "${release_artifact}.sig"
+
+          node scripts/create-updater-json.mjs \
+            --artifact "$release_artifact" \
+            --signature "${release_artifact}.sig" \
+            --platform "$platform" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --output latest.json
 
       - name: Publish GitHub release
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
-            --title "FlickTerm ${GITHUB_REF_NAME} - Rust/Tauri 移行" \
+            --title "FlickTerm ${GITHUB_REF_NAME}" \
             --notes-from-tag
-          gh release upload "$GITHUB_REF_NAME" "FlickTerm-${GITHUB_REF_NAME}-macos.app.zip" --clobber
+          gh release upload "$GITHUB_REF_NAME" \
+            "FlickTerm-${GITHUB_REF_NAME}-macos.app.zip" \
+            FlickTerm-${GITHUB_REF_NAME}-darwin-*.app.tar.gz \
+            FlickTerm-${GITHUB_REF_NAME}-darwin-*.app.tar.gz.sig \
+            latest.json \
+            --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -44,6 +44,7 @@ const shortcutsEditorElement = getElement("shortcuts-editor");
 const addCommandButton = getElement("add-command-button") as HTMLButtonElement;
 const resetCommandsButton = getElement("reset-commands-button") as HTMLButtonElement;
 const resetShortcutsButton = getElement("reset-shortcuts-button") as HTMLButtonElement;
+const checkUpdatesButton = getElement("check-updates-button") as HTMLButtonElement;
 const cancelSettingsButton = getElement("cancel-settings-button") as HTMLButtonElement;
 const saveSettingsButton = getElement("save-settings-button") as HTMLButtonElement;
 
@@ -306,6 +307,12 @@ resetShortcutsButton.addEventListener("click", () => {
     .catch((error) => {
       showSettingsStatus(error instanceof Error ? error.message : "Failed to reset shortcuts.", true);
     });
+});
+
+checkUpdatesButton.addEventListener("click", () => {
+  checkForUpdates().catch((error) => {
+    showSettingsStatus(error instanceof Error ? error.message : "Failed to check for updates.", true);
+  });
 });
 
 cancelSettingsButton.addEventListener("click", () => {
@@ -911,6 +918,23 @@ async function saveSettings(): Promise<void> {
   }
 }
 
+async function checkForUpdates(): Promise<void> {
+  checkUpdatesButton.disabled = true;
+  showSettingsStatus("Checking for updates...");
+
+  try {
+    const result = await window.terminalApi.installUpdateIfAvailable();
+    if (!result.available) {
+      showSettingsStatus("FlickTerm is up to date.");
+      return;
+    }
+
+    showSettingsStatus(`Installing ${result.version ?? "the latest version"} and restarting...`);
+  } finally {
+    checkUpdatesButton.disabled = false;
+  }
+}
+
 function validateSettings(settings: AppSettings): ValidationResult {
   const messages: string[] = [];
   const commandIds = new Set<string>();
@@ -1114,7 +1138,7 @@ function displayAccelerator(accelerator: string): string {
   return accelerator.replace("CmdOrCtrl", isMac ? "Cmd" : "Ctrl");
 }
 
-function showSettingsStatus(message: string, isError: boolean): void {
+function showSettingsStatus(message: string, isError = false): void {
   settingsStatusElement.textContent = message;
   settingsStatusElement.classList.toggle("is-error", isError);
 }

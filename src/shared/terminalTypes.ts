@@ -83,10 +83,16 @@ export type TerminalExitEvent = {
   signal?: number;
 };
 
+export type UpdateInstallResult = {
+  available: boolean;
+  version?: string;
+};
+
 export type TerminalApi = {
   getQuickCommands: () => Promise<QuickCommand[]>;
   getAppSettings: () => Promise<AppSettingsSnapshot>;
   saveAppSettings: (settings: AppSettings) => Promise<AppSettingsSnapshot>;
+  installUpdateIfAvailable: () => Promise<UpdateInstallResult>;
   createTerminal: (request: CreateTerminalRequest) => Promise<CreateTerminalResponse>;
   writeTerminal: (request: TerminalWriteRequest) => void;
   resizeTerminal: (request: TerminalResizeRequest) => void;

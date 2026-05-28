@@ -48,7 +48,28 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Pushing a version tag can be used by release automation to publish macOS artifacts.
+Keep `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` versions aligned with the tag. Pushing a version tag publishes macOS artifacts to GitHub Releases.
+
+## App Updates
+
+FlickTerm uses the Tauri updater plugin with GitHub Releases. The app checks:
+
+```txt
+https://github.com/TakutoAndo0401/FlickTerm/releases/latest/download/latest.json
+```
+
+Create an updater signing key once, or keep using the key generated during setup:
+
+```sh
+mise exec -- pnpm tauri signer generate --ci -p "" -w ~/.tauri/flickterm-updater.key
+```
+
+Add these GitHub Actions secrets before pushing a release tag:
+
+- `TAURI_SIGNING_PRIVATE_KEY`: the contents of `~/.tauri/flickterm-updater.key`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: leave unset when using an empty password
+
+The public key is stored in `src-tauri/tauri.conf.json`. If you generate a new private key, replace the `plugins.updater.pubkey` value with the generated `.pub` file contents. Keep the private key out of Git.
 
 ## Notes
 

@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import type {
   AppSettings,
   AppSettingsSnapshot,
@@ -13,7 +15,8 @@ import type {
   TerminalExitEvent,
   TerminalKillRequest,
   TerminalResizeRequest,
-  TerminalWriteRequest
+  TerminalWriteRequest,
+  UpdateInstallResult
 } from "../shared/terminalTypes";
 
 const shortcutCallbacks = new Set<(actionId: string) => void>();
@@ -32,6 +35,21 @@ const terminalApi: TerminalApi = {
     const snapshot = await invoke<AppSettingsSnapshot>("settings_save", { settings });
     await syncGlobalShortcuts(snapshot.settings);
     return withShortcutErrors(snapshot);
+  },
+
+  installUpdateIfAvailable: async () => {
+    const update = await check();
+    if (!update || ("available" in update && update.available === false)) {
+      return { available: false };
+    }
+
+    const result: UpdateInstallResult = {
+      available: true,
+      version: update.version
+    };
+    await update.downloadAndInstall();
+    await relaunch();
+    return result;
   },
 
   createTerminal: (request: CreateTerminalRequest) =>
