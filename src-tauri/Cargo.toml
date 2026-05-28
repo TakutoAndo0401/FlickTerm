@@ -1,6 +1,6 @@
 [package]
 name = "flickterm"
-version = "0.1.1"
+version = "0.2.0"
 description = "A lightweight Rust/Tauri terminal built with xterm.js."
 authors = ["FlickTerm"]
 edition = "2024"
