@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FlickTerm",
+  "version": "0.1.1",
+  "identifier": "com.flickterm.app",
+  "build": {
+    "beforeDevCommand": "pnpm run dev:renderer",
+    "beforeBuildCommand": "pnpm run build:renderer",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../out/renderer"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "FlickTerm",
+        "label": "main",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 420,
+        "backgroundColor": "#111315"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [],
+    "targets": ["app"]
+  }
+}

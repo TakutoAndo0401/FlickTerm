@@ -1,6 +1,9 @@
 node_modules/
+.pnpm-store/
 out/
 dist/
 release/
+src-tauri/gen/
+src-tauri/target/
 .DS_Store
 *.log

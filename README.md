@@ -1,12 +1,14 @@
-# Lightweight Terminal
+# FlickTerm
 
-A small Electron terminal app built with TypeScript, xterm.js, and node-pty.
+A small Rust/Tauri terminal app built with TypeScript, xterm.js, and portable-pty.
 
 ## Requirements
 
 - Node.js
 - pnpm
-- mise is recommended for installing the pinned Node.js and pnpm versions.
+- Rust
+- macOS development tools, such as Xcode Command Line Tools
+- mise is recommended for installing the pinned Node.js, pnpm, and Rust versions.
 
 ## Install
 
@@ -14,8 +16,6 @@ A small Electron terminal app built with TypeScript, xterm.js, and node-pty.
 mise install
 pnpm install
 ```
-
-`pnpm install` runs `electron-rebuild` for node-pty automatically.
 
 ## Development
 
@@ -31,42 +31,33 @@ mise install
 pnpm build
 ```
 
-## Package for macOS
+The macOS app bundle is written to `src-tauri/target/release/bundle/macos/`.
+
+## Package for macOS App Bundle
 
 ```sh
 mise install
 pnpm install
-pnpm dist:mac
+pnpm build
 ```
 
-Artifacts are written to `release/`.
+Artifacts are written to `src-tauri/target/release/bundle/macos/`.
 
 ```sh
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Pushing a version tag publishes the macOS artifacts to GitHub Releases.
+Pushing a version tag can be used by release automation to publish macOS artifacts.
 
 ## Notes
 
-- node-pty may require rebuild for Electron.
-- If the terminal fails to spawn or does not accept input after dependency installation, run:
-
-```sh
-pnpm run rebuild
-```
-
-or:
-
-```sh
-pnpm exec electron-rebuild -f -w node-pty
-```
-
+- Tauri uses Rust for the desktop backend and the system WebView for rendering.
+- The terminal PTY is handled by Rust through portable-pty.
+- macOS DMG packaging is intentionally not enabled in the default build target; the verified default artifact is the `.app` bundle.
 
 ## Structure
 
-- `src/main`: Electron app lifecycle, BrowserWindow, globalShortcut, IPC, and node-pty process management.
-- `src/preload`: Safe context bridge for renderer IPC access.
+- `src-tauri`: Rust/Tauri app lifecycle, commands, settings, global shortcut plugin setup, and PTY process management.
 - `src/renderer`: Plain HTML/CSS/TypeScript UI, xterm.js rendering, tabs, and quick commands.
 - `src/shared`: Shared TypeScript types for terminal tabs, IPC payloads, and commands.

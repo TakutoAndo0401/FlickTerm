@@ -1,0 +1,23 @@
+[package]
+name = "flickterm"
+version = "0.1.1"
+description = "A lightweight Rust/Tauri terminal built with xterm.js."
+authors = ["FlickTerm"]
+edition = "2024"
+rust-version = "1.95.0"
+
+[lib]
+name = "flickterm_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+dirs = "6"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-global-shortcut = "2"
+thiserror = "2"

@@ -11,8 +11,7 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
-    "isolatedModules": true,
-    "types": ["electron"]
+    "isolatedModules": true
   },
-  "include": ["electron.vite.config.ts", "src/**/*.ts"]
+  "include": ["vite.config.ts", "src/renderer/**/*.ts", "src/shared/**/*.ts"]
 }

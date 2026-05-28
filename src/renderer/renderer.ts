@@ -1,5 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
+import "./tauriApi";
 import { createTerminalView, type RendererTerminalTab } from "./terminalTabs";
 import type {
   AppSettings,
