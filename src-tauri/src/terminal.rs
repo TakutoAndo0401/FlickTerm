@@ -82,7 +82,6 @@ impl PtyManager {
             .map_err(|error| PtyError::Spawn(error.to_string()))?;
 
         let mut command = CommandBuilder::new(shell);
-        command.env("TERM", "xterm-256color");
         if let Some(cwd) = &request.cwd {
             command.cwd(cwd);
         } else if let Some(home) = dirs::home_dir() {
@@ -91,6 +90,7 @@ impl PtyManager {
         for (key, value) in env::vars() {
             command.env(key, value);
         }
+        command.env("TERM", "xterm-256color");
 
         let child = pair
             .slave

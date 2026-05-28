@@ -299,6 +299,7 @@ button {
 }
 
 .settings-dialog {
+  position: relative;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   width: min(880px, calc(100vw - 56px));
@@ -520,4 +521,47 @@ button {
   justify-content: flex-end;
   padding: 12px 16px;
   border-top: 1px solid #252a30;
+}
+
+.settings-confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 42%);
+}
+
+.command-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 42%);
+}
+
+.settings-confirm {
+  width: min(360px, 100%);
+  padding: 16px;
+  border: 1px solid #333b45;
+  border-radius: 8px;
+  background: #1c2026;
+  box-shadow: 0 14px 36px rgb(0 0 0 / 40%);
+}
+
+.settings-confirm p {
+  margin: 0;
+  color: #eef2f6;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.settings-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
 }

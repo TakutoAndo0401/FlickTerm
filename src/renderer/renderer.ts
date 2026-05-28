@@ -82,6 +82,19 @@ let appSettings: AppSettings | null = null;
 let draftSettings: AppSettings | null = null;
 let settingsTab: "commands" | "shortcuts" = "commands";
 let recordingActionId: string | null = null;
+let isSavingSettings = false;
+let activeSettingsConfirmation:
+  | {
+      resolve: (confirmed: boolean) => void;
+      element: HTMLElement;
+    }
+  | null = null;
+let activeCommandConfirmation:
+  | {
+      resolve: (confirmed: boolean) => void;
+      element: HTMLElement;
+    }
+  | null = null;
 
 window.terminalApi.onTerminalData(({ id, data }) => {
   tabs.get(id)?.terminal.write(data);
@@ -109,9 +122,21 @@ document.addEventListener(
       return;
     }
 
+    if (event.key === "Escape" && activeCommandConfirmation) {
+      event.preventDefault();
+      resolveCommandConfirmation(false);
+      return;
+    }
+
     if (event.key === "Escape" && isSettingsOpen()) {
       event.preventDefault();
-      closeSettingsWithConfirmation();
+      if (activeSettingsConfirmation) {
+        resolveSettingsConfirmation(false);
+      } else {
+        closeSettingsWithConfirmation().catch((error) => {
+          console.error("Failed to close settings", error);
+        });
+      }
       return;
     }
 
@@ -198,12 +223,16 @@ commandPanelResizeHandle.addEventListener("keydown", (event) => {
 });
 
 settingsCloseButton.addEventListener("click", () => {
-  closeSettingsWithConfirmation();
+  closeSettingsWithConfirmation().catch((error) => {
+    console.error("Failed to close settings", error);
+  });
 });
 
 settingsOverlay.addEventListener("click", (event) => {
   if (event.target === settingsOverlay) {
-    closeSettingsWithConfirmation();
+    closeSettingsWithConfirmation().catch((error) => {
+      console.error("Failed to close settings", error);
+    });
   }
 });
 
@@ -236,22 +265,28 @@ resetCommandsButton.addEventListener("click", () => {
     return;
   }
 
-  if (!window.confirm("Reset Commands to defaults?")) {
-    return;
-  }
-
-  const defaultCommandIds = new Set(settingsSnapshot.defaults.commands.map((command) => command.id));
-  draftSettings.commands = cloneSettings(settingsSnapshot.defaults).commands;
-  draftSettings.shortcuts = Object.fromEntries(
-    Object.entries(draftSettings.shortcuts).filter(([actionId]) => {
-      if (!actionId.startsWith("runCommand:")) {
-        return true;
+  confirmSettingsAction("Reset commands to defaults?", "Reset")
+    .then((confirmed) => {
+      if (!confirmed || !draftSettings || !settingsSnapshot) {
+        return;
       }
 
-      return defaultCommandIds.has(actionId.slice("runCommand:".length));
+      const defaultCommandIds = new Set(settingsSnapshot.defaults.commands.map((command) => command.id));
+      draftSettings.commands = cloneSettings(settingsSnapshot.defaults).commands;
+      draftSettings.shortcuts = Object.fromEntries(
+        Object.entries(draftSettings.shortcuts).filter(([actionId]) => {
+          if (!actionId.startsWith("runCommand:")) {
+            return true;
+          }
+
+          return defaultCommandIds.has(actionId.slice("runCommand:".length));
+        })
+      );
+      renderSettingsModal();
     })
-  );
-  renderSettingsModal();
+    .catch((error) => {
+      showSettingsStatus(error instanceof Error ? error.message : "Failed to reset commands.", true);
+    });
 });
 
 resetShortcutsButton.addEventListener("click", () => {
@@ -259,16 +294,24 @@ resetShortcutsButton.addEventListener("click", () => {
     return;
   }
 
-  if (!window.confirm("Reset Shortcuts to defaults?")) {
-    return;
-  }
+  confirmSettingsAction("Reset shortcuts to defaults?", "Reset")
+    .then((confirmed) => {
+      if (!confirmed || !draftSettings || !settingsSnapshot) {
+        return;
+      }
 
-  draftSettings.shortcuts = cloneSettings(settingsSnapshot.defaults).shortcuts;
-  renderSettingsModal();
+      draftSettings.shortcuts = cloneSettings(settingsSnapshot.defaults).shortcuts;
+      renderSettingsModal();
+    })
+    .catch((error) => {
+      showSettingsStatus(error instanceof Error ? error.message : "Failed to reset shortcuts.", true);
+    });
 });
 
 cancelSettingsButton.addEventListener("click", () => {
-  closeSettingsWithConfirmation();
+  closeSettingsWithConfirmation().catch((error) => {
+    console.error("Failed to close settings", error);
+  });
 });
 
 saveSettingsButton.addEventListener("click", () => {
@@ -503,18 +546,20 @@ function createQuickCommandButton(command: QuickCommand): HTMLButtonElement {
   button.textContent = command.label;
   button.title = command.command;
   button.addEventListener("click", () => {
-    runCommand(command);
+    runCommand(command).catch((error) => {
+      console.error("Failed to run command", error);
+    });
   });
 
   return button;
 }
 
-function runCommand(command: QuickCommand): void {
+async function runCommand(command: QuickCommand): Promise<void> {
   if (!activeTabId) {
     return;
   }
 
-  if (command.runMode === "confirm" && !window.confirm(`Run this command?\n${command.command}`)) {
+  if (command.runMode === "confirm" && !(await confirmCommandAction(`Run this command?\n${command.command}`, "Run"))) {
     return;
   }
 
@@ -564,7 +609,9 @@ function runShortcutAction(actionId: string): void {
     const commandId = actionId.slice("runCommand:".length);
     const command = appSettings?.commands.find((item) => item.id === commandId);
     if (command) {
-      runCommand(command);
+      runCommand(command).catch((error) => {
+        console.error("Failed to run command", error);
+      });
     }
   }
 }
@@ -599,12 +646,12 @@ function openSettings(): void {
   settingsDialog.focus();
 }
 
-function closeSettingsWithConfirmation(): void {
+async function closeSettingsWithConfirmation(): Promise<void> {
   if (!isSettingsOpen()) {
     return;
   }
 
-  if (hasUnsavedChanges() && !window.confirm("Discard unsaved settings changes?")) {
+  if (hasUnsavedChanges() && !(await confirmSettingsAction("Discard unsaved settings changes?", "Discard"))) {
     return;
   }
 
@@ -612,8 +659,10 @@ function closeSettingsWithConfirmation(): void {
 }
 
 function closeSettings(): void {
+  resolveSettingsConfirmation(false);
   recordingActionId = null;
   draftSettings = null;
+  isSavingSettings = false;
   settingsOverlay.classList.remove("is-open");
   settingsOverlay.setAttribute("aria-hidden", "true");
 }
@@ -685,13 +734,23 @@ function renderCommandEditor(): void {
     deleteButton.className = "settings-danger-button";
     deleteButton.textContent = "Delete";
     deleteButton.addEventListener("click", () => {
-      if (!draftSettings || !window.confirm(`Delete "${command.label}"?`)) {
+      if (!draftSettings) {
         return;
       }
 
-      draftSettings.commands = draftSettings.commands.filter((item) => item.id !== command.id);
-      delete draftSettings.shortcuts[`runCommand:${command.id}`];
-      renderSettingsModal();
+      confirmSettingsAction(`Delete "${command.label}"?`, "Delete")
+        .then((confirmed) => {
+          if (!confirmed || !draftSettings) {
+            return;
+          }
+
+          draftSettings.commands = draftSettings.commands.filter((item) => item.id !== command.id);
+          delete draftSettings.shortcuts[`runCommand:${command.id}`];
+          renderSettingsModal();
+        })
+        .catch((error) => {
+          showSettingsStatus(error instanceof Error ? error.message : "Failed to delete command.", true);
+        });
     });
 
     row.append(labelInput, commandInput, runModeSelect, deleteButton);
@@ -817,7 +876,7 @@ function handleShortcutRecording(event: KeyboardEvent): void {
 }
 
 async function saveSettings(): Promise<void> {
-  if (!draftSettings) {
+  if (!draftSettings || isSavingSettings) {
     return;
   }
 
@@ -828,20 +887,28 @@ async function saveSettings(): Promise<void> {
     return;
   }
 
-  const snapshot = await window.terminalApi.saveAppSettings(draftSettings);
-  settingsSnapshot = snapshot;
-  appSettings = cloneSettings(snapshot.settings);
-  draftSettings = cloneSettings(snapshot.settings);
-  renderQuickCommands();
-  renderSettingsModal();
-  showSettingsNotice(snapshot.notice ?? "");
+  isSavingSettings = true;
+  updateSaveState();
 
-  if (snapshot.globalShortcutErrors.length > 0) {
-    showSettingsStatus(snapshot.globalShortcutErrors.map((error) => error.message).join(" "), true);
-    return;
+  try {
+    const snapshot = await window.terminalApi.saveAppSettings(cloneSettings(draftSettings));
+    settingsSnapshot = snapshot;
+    appSettings = cloneSettings(snapshot.settings);
+    draftSettings = cloneSettings(snapshot.settings);
+    renderQuickCommands();
+    renderSettingsModal();
+    showSettingsNotice(snapshot.notice ?? "");
+
+    if (snapshot.globalShortcutErrors.length > 0) {
+      showSettingsStatus(snapshot.globalShortcutErrors.map((error) => error.message).join(" "), true);
+      return;
+    }
+
+    closeSettings();
+  } finally {
+    isSavingSettings = false;
+    updateSaveState();
   }
-
-  showSettingsStatus("Settings saved.", false);
 }
 
 function validateSettings(settings: AppSettings): ValidationResult {
@@ -897,7 +964,7 @@ function updateSaveState(): void {
   }
 
   const validation = validateSettings(draftSettings);
-  saveSettingsButton.disabled = !validation.valid;
+  saveSettingsButton.disabled = isSavingSettings || !validation.valid;
 
   if (!validation.valid) {
     showSettingsStatus(validation.messages[0] ?? "Settings are invalid.", true);
@@ -967,11 +1034,36 @@ function normalizeKey(event: KeyboardEvent): string | null {
     Slash: "/",
     Semicolon: ";",
     Quote: "'",
-    Backquote: "`"
+    Backquote: "`",
+    Backslash: "\\",
+    Escape: "Esc",
+    Delete: "Delete",
+    Backspace: "Backspace",
+    Insert: "Insert",
+    Home: "Home",
+    End: "End",
+    PageUp: "PageUp",
+    PageDown: "PageDown"
   };
   const codeKey = codeMap[event.code];
   if (codeKey) {
     return codeKey;
+  }
+
+  if (/^Key[A-Z]$/.test(event.code)) {
+    return event.code.slice("Key".length);
+  }
+
+  if (/^Digit[0-9]$/.test(event.code)) {
+    return event.code.slice("Digit".length);
+  }
+
+  if (/^Numpad[0-9]$/.test(event.code)) {
+    return event.code.slice("Numpad".length);
+  }
+
+  if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(event.code)) {
+    return event.code;
   }
 
   const key = event.key;
@@ -1002,7 +1094,16 @@ function normalizeKey(event: KeyboardEvent): string | null {
     "/": "/",
     ";": ";",
     "'": "'",
-    "`": "`"
+    "`": "`",
+    "\\": "\\",
+    Escape: "Esc",
+    Delete: "Delete",
+    Backspace: "Backspace",
+    Insert: "Insert",
+    Home: "Home",
+    End: "End",
+    PageUp: "PageUp",
+    PageDown: "PageDown"
   };
 
   return keyMap[key] ?? null;
@@ -1021,6 +1122,134 @@ function showSettingsStatus(message: string, isError: boolean): void {
 function showSettingsNotice(message: string): void {
   settingsNoticeElement.textContent = message;
   settingsNoticeElement.classList.toggle("is-visible", message.length > 0);
+}
+
+function confirmCommandAction(message: string, confirmLabel: string): Promise<boolean> {
+  resolveCommandConfirmation(false);
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "command-confirm-backdrop";
+
+  const dialog = document.createElement("div");
+  dialog.className = "settings-confirm";
+  dialog.setAttribute("role", "alertdialog");
+  dialog.setAttribute("aria-modal", "true");
+
+  const text = document.createElement("p");
+  text.textContent = message;
+
+  const actions = document.createElement("div");
+  actions.className = "settings-confirm-actions";
+
+  const cancelButton = document.createElement("button");
+  cancelButton.type = "button";
+  cancelButton.className = "settings-secondary-button";
+  cancelButton.textContent = "Cancel";
+
+  const confirmButton = document.createElement("button");
+  confirmButton.type = "button";
+  confirmButton.className = "settings-primary-button";
+  confirmButton.textContent = confirmLabel;
+
+  actions.append(cancelButton, confirmButton);
+  dialog.append(text, actions);
+  backdrop.append(dialog);
+  document.body.append(backdrop);
+
+  return new Promise((resolve) => {
+    activeCommandConfirmation = {
+      resolve,
+      element: backdrop
+    };
+
+    cancelButton.addEventListener("click", () => {
+      resolveCommandConfirmation(false);
+    });
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) {
+        resolveCommandConfirmation(false);
+      }
+    });
+    confirmButton.addEventListener("click", () => {
+      resolveCommandConfirmation(true);
+    });
+    confirmButton.focus();
+  });
+}
+
+function resolveCommandConfirmation(confirmed: boolean): void {
+  if (!activeCommandConfirmation) {
+    return;
+  }
+
+  const confirmation = activeCommandConfirmation;
+  activeCommandConfirmation = null;
+  confirmation.element.remove();
+  confirmation.resolve(confirmed);
+}
+
+function confirmSettingsAction(message: string, confirmLabel: string): Promise<boolean> {
+  resolveSettingsConfirmation(false);
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "settings-confirm-backdrop";
+
+  const dialog = document.createElement("div");
+  dialog.className = "settings-confirm";
+  dialog.setAttribute("role", "alertdialog");
+  dialog.setAttribute("aria-modal", "true");
+
+  const text = document.createElement("p");
+  text.textContent = message;
+
+  const actions = document.createElement("div");
+  actions.className = "settings-confirm-actions";
+
+  const cancelButton = document.createElement("button");
+  cancelButton.type = "button";
+  cancelButton.className = "settings-secondary-button";
+  cancelButton.textContent = "Cancel";
+
+  const confirmButton = document.createElement("button");
+  confirmButton.type = "button";
+  confirmButton.className = confirmLabel === "Delete" ? "settings-danger-button" : "settings-primary-button";
+  confirmButton.textContent = confirmLabel;
+
+  actions.append(cancelButton, confirmButton);
+  dialog.append(text, actions);
+  backdrop.append(dialog);
+  settingsDialog.append(backdrop);
+
+  return new Promise((resolve) => {
+    activeSettingsConfirmation = {
+      resolve,
+      element: backdrop
+    };
+
+    cancelButton.addEventListener("click", () => {
+      resolveSettingsConfirmation(false);
+    });
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) {
+        resolveSettingsConfirmation(false);
+      }
+    });
+    confirmButton.addEventListener("click", () => {
+      resolveSettingsConfirmation(true);
+    });
+    confirmButton.focus();
+  });
+}
+
+function resolveSettingsConfirmation(confirmed: boolean): void {
+  if (!activeSettingsConfirmation) {
+    return;
+  }
+
+  const confirmation = activeSettingsConfirmation;
+  activeSettingsConfirmation = null;
+  confirmation.element.remove();
+  confirmation.resolve(confirmed);
 }
 
 function hasUnsavedChanges(): boolean {
