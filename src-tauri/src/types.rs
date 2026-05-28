@@ -115,7 +115,7 @@ pub struct TerminalKillRequest {
 #[serde(rename_all = "camelCase")]
 pub struct TerminalDataEvent {
     pub id: String,
-    pub data: String,
+    pub data: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

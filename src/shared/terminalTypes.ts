@@ -74,7 +74,7 @@ export type TerminalKillRequest = {
 
 export type TerminalDataEvent = {
   id: string;
-  data: string;
+  data: number[];
 };
 
 export type TerminalExitEvent = {

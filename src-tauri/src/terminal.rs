@@ -7,6 +7,7 @@ use std::{
     collections::HashMap,
     env,
     io::{Read, Write},
+    path::PathBuf,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -81,7 +82,10 @@ impl PtyManager {
             })
             .map_err(|error| PtyError::Spawn(error.to_string()))?;
 
-        let mut command = CommandBuilder::new(shell);
+        let mut command = CommandBuilder::new(shell.clone());
+        if should_start_as_login_shell(&shell) {
+            command.arg("-l");
+        }
         if let Some(cwd) = &request.cwd {
             command.cwd(cwd);
         } else if let Some(home) = dirs::home_dir() {
@@ -89,6 +93,9 @@ impl PtyManager {
         }
         for (key, value) in env::vars() {
             command.env(key, value);
+        }
+        if let Some(path) = terminal_path_env() {
+            command.env("PATH", path);
         }
         command.env("TERM", "xterm-256color");
 
@@ -198,12 +205,11 @@ impl PtyManager {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(size) => {
-                        let data = String::from_utf8_lossy(&buffer[..size]).to_string();
                         let _ = app.emit(
                             "terminal:data",
                             TerminalDataEvent {
                                 id: id.clone(),
-                                data,
+                                data: buffer[..size].to_vec(),
                             },
                         );
                     }
@@ -270,4 +276,91 @@ fn shell_title(shell: &str) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or(shell)
         .to_string()
+}
+
+fn should_start_as_login_shell(shell: &str) -> bool {
+    if cfg!(windows) {
+        return false;
+    }
+
+    matches!(shell_title(shell).as_str(), "bash" | "fish" | "zsh")
+}
+
+fn terminal_path_env() -> Option<String> {
+    if cfg!(windows) {
+        return None;
+    }
+
+    let current = env::var("PATH").unwrap_or_default();
+    let entries = existing_supplemental_path_entries();
+    let path = append_missing_path_entries(&current, &entries);
+
+    (!path.is_empty()).then_some(path)
+}
+
+fn existing_supplemental_path_entries() -> Vec<String> {
+    let mut paths = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/local/sbin"),
+    ];
+
+    if let Some(home) = dirs::home_dir() {
+        paths.push(home.join(".local/bin"));
+        paths.push(home.join(".local/share/mise/shims"));
+    }
+
+    paths
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .filter_map(|path| path.into_os_string().into_string().ok())
+        .collect()
+}
+
+fn append_missing_path_entries(current: &str, supplemental_entries: &[String]) -> String {
+    let mut entries = current
+        .split(':')
+        .filter(|entry| !entry.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    for entry in supplemental_entries {
+        if !entries.iter().any(|existing| existing == entry) {
+            entries.push(entry.clone());
+        }
+    }
+
+    entries.join(":")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starts_known_unix_shells_as_login_shells() {
+        assert!(should_start_as_login_shell("/bin/zsh"));
+        assert!(should_start_as_login_shell("/opt/homebrew/bin/bash"));
+        assert!(should_start_as_login_shell("fish"));
+    }
+
+    #[test]
+    fn does_not_add_login_flag_to_unknown_shells() {
+        assert!(!should_start_as_login_shell("/bin/sh"));
+        assert!(!should_start_as_login_shell("/usr/bin/false"));
+    }
+
+    #[test]
+    fn appends_missing_path_entries_without_duplicates() {
+        let supplemental_entries = vec![
+            "/opt/homebrew/bin".to_string(),
+            "/Users/example/.local/bin".to_string(),
+        ];
+
+        assert_eq!(
+            append_missing_path_entries("/usr/bin:/opt/homebrew/bin", &supplemental_entries),
+            "/usr/bin:/opt/homebrew/bin:/Users/example/.local/bin"
+        );
+    }
 }

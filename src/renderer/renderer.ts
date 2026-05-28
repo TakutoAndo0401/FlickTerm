@@ -97,7 +97,7 @@ let activeCommandConfirmation:
   | null = null;
 
 window.terminalApi.onTerminalData(({ id, data }) => {
-  tabs.get(id)?.terminal.write(data);
+  tabs.get(id)?.terminal.write(new Uint8Array(data));
 });
 
 window.terminalApi.onTerminalExit(({ id, exitCode }) => {
