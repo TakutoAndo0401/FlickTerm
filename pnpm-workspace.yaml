@@ -1,7 +1,12 @@
 packages:
   - .
 
-onlyBuiltDependencies:
-  - electron
-  - esbuild
-  - node-pty
+allowBuilds:
+  electron: true
+  electron-winstaller: false
+  esbuild: true
+  node-pty: true
+
+minimumReleaseAgeExclude:
+  - electron-to-chromium@1.5.363
+  - tmp@0.2.7
