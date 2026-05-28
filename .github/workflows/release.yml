@@ -12,6 +12,8 @@ jobs:
   mac:
     name: macOS
     runs-on: macos-latest
+    env:
+      HAS_TAURI_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
 
     steps:
       - name: Checkout
@@ -37,7 +39,15 @@ jobs:
         run: pnpm typecheck
 
       - name: Build macOS app bundle
-        run: pnpm build
+        run: |
+          set -euo pipefail
+
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            pnpm build
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; building without updater artifacts."
+            pnpm exec tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          fi
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -46,6 +56,7 @@ jobs:
         run: ditto -c -k --keepParent src-tauri/target/release/bundle/macos/FlickTerm.app FlickTerm-${GITHUB_REF_NAME}-macos.app.zip
 
       - name: Prepare updater artifacts
+        if: env.HAS_TAURI_SIGNING_KEY == 'true'
         run: |
           set -euo pipefail
 
@@ -88,6 +99,14 @@ jobs:
             --notes-from-tag
           gh release upload "$GITHUB_REF_NAME" \
             "FlickTerm-${GITHUB_REF_NAME}-macos.app.zip" \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish updater artifacts
+        if: env.HAS_TAURI_SIGNING_KEY == 'true'
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
             FlickTerm-${GITHUB_REF_NAME}-darwin-*.app.tar.gz \
             FlickTerm-${GITHUB_REF_NAME}-darwin-*.app.tar.gz.sig \
             latest.json \
