@@ -1,5 +1,6 @@
 use crate::types::{
-    AppSettings, AppSettingsSnapshot, LayoutSettings, QuickCommand, QuickCommandRunMode,
+    AppSettings, AppSettingsSnapshot, AppearanceSettings, AutosuggestionSettings,
+    CommandHistorySettings, FeatureSettings, LayoutSettings, QuickCommand, QuickCommandRunMode,
     ShortcutBinding, ShortcutRegistrationError, ShortcutScope,
 };
 use serde_json::Value;
@@ -18,6 +19,19 @@ const TOGGLE_SHORTCUT: &str = "Alt+Space";
 const DEFAULT_COMMAND_PANEL_WIDTH: u16 = 168;
 const MIN_COMMAND_PANEL_WIDTH: u16 = 120;
 const MAX_COMMAND_PANEL_WIDTH: u16 = 360;
+const DEFAULT_FONT_FAMILY: &str = "Menlo, Monaco, Consolas, 'Courier New', monospace";
+const DEFAULT_FONT_SIZE: u16 = 13;
+const MIN_FONT_SIZE: u16 = 10;
+const MAX_FONT_SIZE: u16 = 28;
+const DEFAULT_LETTER_SPACING: f64 = 0.0;
+const MIN_LETTER_SPACING: f64 = -1.0;
+const MAX_LETTER_SPACING: f64 = 4.0;
+const DEFAULT_LINE_HEIGHT: f64 = 1.2;
+const MIN_LINE_HEIGHT: f64 = 1.0;
+const MAX_LINE_HEIGHT: f64 = 1.8;
+const DEFAULT_COMMAND_HISTORY_MAX_ENTRIES: usize = 5000;
+const MIN_COMMAND_HISTORY_MAX_ENTRIES: usize = 100;
+const MAX_COMMAND_HISTORY_MAX_ENTRIES: usize = 50000;
 
 #[derive(Debug, Error)]
 pub enum SettingsError {
@@ -168,11 +182,15 @@ fn normalize_settings(value: Value) -> Result<AppSettings, SettingsError> {
         .collect::<HashSet<_>>();
     let shortcuts = normalize_shortcuts(object.get("shortcuts"), &command_ids)?;
     let layout = normalize_layout(object.get("layout"));
+    let appearance = normalize_appearance(object.get("appearance"));
+    let features = normalize_features(object.get("features"));
 
     Ok(AppSettings {
         commands,
         shortcuts,
         layout,
+        appearance,
+        features,
     })
 }
 
@@ -292,6 +310,80 @@ fn normalize_layout(value: Option<&Value>) -> LayoutSettings {
     }
 }
 
+fn normalize_appearance(value: Option<&Value>) -> AppearanceSettings {
+    let object = value.and_then(Value::as_object);
+    let font_family = object
+        .and_then(|object| object.get("fontFamily"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(160).collect())
+        .unwrap_or_else(|| DEFAULT_FONT_FAMILY.to_string());
+    let font_size = object
+        .and_then(|object| object.get("fontSize"))
+        .and_then(Value::as_u64)
+        .and_then(|number| u16::try_from(number).ok())
+        .unwrap_or(DEFAULT_FONT_SIZE)
+        .clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+    let letter_spacing = object
+        .and_then(|object| object.get("letterSpacing"))
+        .and_then(Value::as_f64)
+        .unwrap_or(DEFAULT_LETTER_SPACING)
+        .clamp(MIN_LETTER_SPACING, MAX_LETTER_SPACING);
+    let line_height = object
+        .and_then(|object| object.get("lineHeight"))
+        .and_then(Value::as_f64)
+        .unwrap_or(DEFAULT_LINE_HEIGHT)
+        .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+
+    AppearanceSettings {
+        font_family,
+        font_size,
+        letter_spacing,
+        line_height,
+    }
+}
+
+fn normalize_features(value: Option<&Value>) -> FeatureSettings {
+    let object = value.and_then(Value::as_object);
+    let command_history = object
+        .and_then(|object| object.get("commandHistory"))
+        .and_then(Value::as_object);
+    let autosuggestions = object
+        .and_then(|object| object.get("autosuggestions"))
+        .and_then(Value::as_object);
+
+    let max_entries = command_history
+        .and_then(|object| object.get("maxEntries"))
+        .and_then(Value::as_u64)
+        .and_then(|number| usize::try_from(number).ok())
+        .unwrap_or(DEFAULT_COMMAND_HISTORY_MAX_ENTRIES)
+        .clamp(
+            MIN_COMMAND_HISTORY_MAX_ENTRIES,
+            MAX_COMMAND_HISTORY_MAX_ENTRIES,
+        );
+
+    FeatureSettings {
+        command_history: CommandHistorySettings {
+            enabled: command_history
+                .and_then(|object| object.get("enabled"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            max_entries,
+        },
+        autosuggestions: AutosuggestionSettings {
+            enabled: autosuggestions
+                .and_then(|object| object.get("enabled"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            accept_with_tab: autosuggestions
+                .and_then(|object| object.get("acceptWithTab"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        },
+    }
+}
+
 fn read_required_string(value: Option<&Value>, label: &str) -> Result<String, SettingsError> {
     match value.and_then(Value::as_str).map(str::trim) {
         Some(value) if !value.is_empty() => Ok(value.to_string()),
@@ -363,6 +455,22 @@ fn default_settings() -> AppSettings {
         shortcuts,
         layout: LayoutSettings {
             command_panel_width: DEFAULT_COMMAND_PANEL_WIDTH,
+        },
+        appearance: AppearanceSettings {
+            font_family: DEFAULT_FONT_FAMILY.to_string(),
+            font_size: DEFAULT_FONT_SIZE,
+            letter_spacing: DEFAULT_LETTER_SPACING,
+            line_height: DEFAULT_LINE_HEIGHT,
+        },
+        features: FeatureSettings {
+            command_history: CommandHistorySettings {
+                enabled: true,
+                max_entries: DEFAULT_COMMAND_HISTORY_MAX_ENTRIES,
+            },
+            autosuggestions: AutosuggestionSettings {
+                enabled: true,
+                accept_with_tab: false,
+            },
         },
     }
 }

@@ -6,6 +6,8 @@ import { check } from "@tauri-apps/plugin-updater";
 import type {
   AppSettings,
   AppSettingsSnapshot,
+  CommandHistoryEntry,
+  CommandHistoryRecordRequest,
   CreateTerminalRequest,
   CreateTerminalResponse,
   QuickCommand,
@@ -36,6 +38,13 @@ const terminalApi: TerminalApi = {
     await syncGlobalShortcuts(snapshot.settings);
     return withShortcutErrors(snapshot);
   },
+
+  listCommandHistory: () => invoke<CommandHistoryEntry[]>("command_history_list"),
+
+  recordCommandHistory: (request: CommandHistoryRecordRequest) =>
+    invoke<CommandHistoryEntry[]>("command_history_record", { request }),
+
+  clearCommandHistory: () => invoke<CommandHistoryEntry[]>("command_history_clear"),
 
   installUpdateIfAvailable: async () => {
     const update = await check();

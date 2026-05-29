@@ -1,17 +1,21 @@
+mod command_history;
 mod settings;
 mod terminal;
 mod types;
 
+use command_history::CommandHistoryStore;
 use settings::SettingsStore;
 use tauri::{Manager, State};
 use terminal::PtyManager;
 use types::{
-    AppSettings, AppSettingsSnapshot, CreateTerminalRequest, CreateTerminalResponse, QuickCommand,
-    TerminalKillRequest, TerminalResizeRequest, TerminalWriteRequest,
+    AppSettings, AppSettingsSnapshot, CommandHistoryEntry, CommandHistoryRecordRequest,
+    CreateTerminalRequest, CreateTerminalResponse, QuickCommand, TerminalKillRequest,
+    TerminalResizeRequest, TerminalWriteRequest,
 };
 
 struct AppState {
     settings: SettingsStore,
+    command_history: CommandHistoryStore,
     pty: PtyManager,
 }
 
@@ -41,6 +45,33 @@ fn settings_save(
         .settings
         .save(settings)
         .and_then(|_| state.settings.get_snapshot(Vec::new()))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn command_history_list(state: State<'_, AppState>) -> Result<Vec<CommandHistoryEntry>, String> {
+    state
+        .command_history
+        .list()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn command_history_record(
+    request: CommandHistoryRecordRequest,
+    state: State<'_, AppState>,
+) -> Result<Vec<CommandHistoryEntry>, String> {
+    state
+        .command_history
+        .record(request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn command_history_clear(state: State<'_, AppState>) -> Result<Vec<CommandHistoryEntry>, String> {
+    state
+        .command_history
+        .clear()
         .map_err(|error| error.to_string())
 }
 
@@ -108,9 +139,12 @@ pub fn run() {
         .setup(|app| {
             let settings = SettingsStore::new(app.handle().clone())?;
             settings.load()?;
+            let command_history = CommandHistoryStore::new(app.handle().clone())?;
+            command_history.load()?;
 
             app.manage(AppState {
                 settings,
+                command_history,
                 pty: PtyManager::default(),
             });
 
@@ -120,6 +154,9 @@ pub fn run() {
             quick_commands_list,
             settings_get,
             settings_save,
+            command_history_list,
+            command_history_record,
+            command_history_clear,
             terminal_create,
             terminal_write,
             terminal_resize,

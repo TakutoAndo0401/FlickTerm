@@ -25,10 +25,30 @@ export type LayoutSettings = {
   commandPanelWidth: number;
 };
 
+export type AppearanceSettings = {
+  fontFamily: string;
+  fontSize: number;
+  letterSpacing: number;
+  lineHeight: number;
+};
+
+export type FeatureSettings = {
+  commandHistory: {
+    enabled: boolean;
+    maxEntries: number;
+  };
+  autosuggestions: {
+    enabled: boolean;
+    acceptWithTab: boolean;
+  };
+};
+
 export type AppSettings = {
   commands: QuickCommand[];
   shortcuts: Record<string, ShortcutBinding>;
   layout: LayoutSettings;
+  appearance: AppearanceSettings;
+  features: FeatureSettings;
 };
 
 export type ShortcutRegistrationError = {
@@ -81,6 +101,22 @@ export type TerminalExitEvent = {
   signal?: number;
 };
 
+export type CommandHistoryEntry = {
+  command: string;
+  cwd?: string;
+  runCount: number;
+  firstRunAt: string;
+  lastRunAt: string;
+  lastExitCode: number | null;
+  lastDurationMs: number | null;
+};
+
+export type CommandHistoryRecordRequest = {
+  command: string;
+  cwd?: string;
+  maxEntries: number;
+};
+
 export type UpdateInstallResult = {
   available: boolean;
   version?: string;
@@ -90,6 +126,9 @@ export type TerminalApi = {
   getQuickCommands: () => Promise<QuickCommand[]>;
   getAppSettings: () => Promise<AppSettingsSnapshot>;
   saveAppSettings: (settings: AppSettings) => Promise<AppSettingsSnapshot>;
+  listCommandHistory: () => Promise<CommandHistoryEntry[]>;
+  recordCommandHistory: (request: CommandHistoryRecordRequest) => Promise<CommandHistoryEntry[]>;
+  clearCommandHistory: () => Promise<CommandHistoryEntry[]>;
   installUpdateIfAvailable: () => Promise<UpdateInstallResult>;
   createTerminal: (request: CreateTerminalRequest) => Promise<CreateTerminalResponse>;
   writeTerminal: (request: TerminalWriteRequest) => void;

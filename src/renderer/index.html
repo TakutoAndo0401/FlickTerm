@@ -52,6 +52,8 @@
           <div class="settings-tabs" role="tablist">
             <button class="settings-tab is-active" type="button" data-settings-tab="commands">Commands</button>
             <button class="settings-tab" type="button" data-settings-tab="shortcuts">Shortcuts</button>
+            <button class="settings-tab" type="button" data-settings-tab="appearance">Appearance</button>
+            <button class="settings-tab" type="button" data-settings-tab="features">Features</button>
           </div>
           <div id="settings-status" class="settings-status" role="status"></div>
           <div id="settings-commands-panel" class="settings-panel is-active">
@@ -78,6 +80,19 @@
               <span></span>
             </div>
             <div id="shortcuts-editor" class="shortcuts-editor"></div>
+          </div>
+          <div id="settings-appearance-panel" class="settings-panel">
+            <div class="settings-toolbar">
+              <button id="reset-appearance-button" class="settings-secondary-button" type="button">Reset Appearance</button>
+            </div>
+            <div id="appearance-editor" class="appearance-editor"></div>
+          </div>
+          <div id="settings-features-panel" class="settings-panel">
+            <div class="settings-toolbar">
+              <button id="clear-history-button" class="settings-danger-button" type="button">Clear History</button>
+              <button id="reset-features-button" class="settings-secondary-button" type="button">Reset Features</button>
+            </div>
+            <div id="features-editor" class="features-editor"></div>
           </div>
           <footer class="settings-footer">
             <button id="check-updates-button" class="settings-secondary-button" type="button">Check for Updates</button>

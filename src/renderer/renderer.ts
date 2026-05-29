@@ -3,8 +3,11 @@ import "./styles.css";
 import "./tauriApi";
 import { createTerminalView, type RendererTerminalTab } from "./terminalTabs";
 import type {
+  AppearanceSettings,
   AppSettings,
   AppSettingsSnapshot,
+  CommandHistoryEntry,
+  FeatureSettings,
   QuickCommand,
   QuickCommandRunMode,
   ShortcutBinding,
@@ -24,6 +27,17 @@ type ValidationResult = {
   messages: string[];
 };
 
+type TerminalInputState = {
+  line: string;
+  cursor: number;
+  dismissedSuggestionFor: string;
+  suggestion: CommandHistoryEntry | null;
+  suggestionOverlay: HTMLDivElement;
+  historyPanel: HTMLDivElement;
+  historyInput: HTMLInputElement;
+  historyResults: HTMLDivElement;
+};
+
 const tabsElement = getElement("tabs");
 const newTabButton = getElement("new-tab-button") as HTMLButtonElement;
 const workspaceElement = getElement("workspace");
@@ -37,13 +51,20 @@ const settingsCloseButton = getElement("settings-close-button") as HTMLButtonEle
 const settingsTabs = Array.from(document.querySelectorAll<HTMLButtonElement>(".settings-tab"));
 const settingsCommandsPanel = getElement("settings-commands-panel");
 const settingsShortcutsPanel = getElement("settings-shortcuts-panel");
+const settingsAppearancePanel = getElement("settings-appearance-panel");
+const settingsFeaturesPanel = getElement("settings-features-panel");
 const settingsStatusElement = getElement("settings-status");
 const settingsNoticeElement = getElement("settings-notice");
 const commandsEditorElement = getElement("commands-editor");
 const shortcutsEditorElement = getElement("shortcuts-editor");
+const appearanceEditorElement = getElement("appearance-editor");
+const featuresEditorElement = getElement("features-editor");
 const addCommandButton = getElement("add-command-button") as HTMLButtonElement;
 const resetCommandsButton = getElement("reset-commands-button") as HTMLButtonElement;
 const resetShortcutsButton = getElement("reset-shortcuts-button") as HTMLButtonElement;
+const resetAppearanceButton = getElement("reset-appearance-button") as HTMLButtonElement;
+const resetFeaturesButton = getElement("reset-features-button") as HTMLButtonElement;
+const clearHistoryButton = getElement("clear-history-button") as HTMLButtonElement;
 const checkUpdatesButton = getElement("check-updates-button") as HTMLButtonElement;
 const cancelSettingsButton = getElement("cancel-settings-button") as HTMLButtonElement;
 const saveSettingsButton = getElement("save-settings-button") as HTMLButtonElement;
@@ -65,8 +86,10 @@ const commandPanelWidthDefault = 168;
 const commandPanelWidthMin = 120;
 const commandPanelWidthMax = 360;
 const commandPanelKeyboardStep = 10;
+const historySearchResultLimit = 8;
 
 const tabs = new Map<string, RendererTerminalTab>();
+const inputStates = new Map<string, TerminalInputState>();
 let activeTabId: string | null = null;
 let tabCounter = 0;
 let resizeTimer: number | undefined;
@@ -81,9 +104,18 @@ let commandPanelResizeState:
 let settingsSnapshot: AppSettingsSnapshot | null = null;
 let appSettings: AppSettings | null = null;
 let draftSettings: AppSettings | null = null;
-let settingsTab: "commands" | "shortcuts" = "commands";
+let settingsTab: "commands" | "shortcuts" | "appearance" | "features" = "commands";
 let recordingActionId: string | null = null;
 let isSavingSettings = false;
+let commandHistory: CommandHistoryEntry[] = [];
+let activeHistorySearch:
+  | {
+      tabId: string;
+      query: string;
+      selectedIndex: number;
+      results: CommandHistoryEntry[];
+    }
+  | null = null;
 let activeSettingsConfirmation:
   | {
       resolve: (confirmed: boolean) => void;
@@ -98,7 +130,9 @@ let activeCommandConfirmation:
   | null = null;
 
 window.terminalApi.onTerminalData(({ id, data }) => {
-  tabs.get(id)?.terminal.write(new Uint8Array(data));
+  tabs.get(id)?.terminal.write(new Uint8Array(data), () => {
+    scheduleSuggestionUpdate(id);
+  });
 });
 
 window.terminalApi.onTerminalExit(({ id, exitCode }) => {
@@ -142,6 +176,11 @@ document.addEventListener(
     }
 
     if (isSettingsOpen()) {
+      return;
+    }
+
+    if (activeHistorySearch) {
+      handleHistorySearchKeydown(event);
       return;
     }
 
@@ -240,7 +279,7 @@ settingsOverlay.addEventListener("click", (event) => {
 for (const tabButton of settingsTabs) {
   tabButton.addEventListener("click", () => {
     const tab = tabButton.dataset.settingsTab;
-    if (tab === "commands" || tab === "shortcuts") {
+    if (tab === "commands" || tab === "shortcuts" || tab === "appearance" || tab === "features") {
       settingsTab = tab;
       renderSettingsModal();
     }
@@ -309,6 +348,62 @@ resetShortcutsButton.addEventListener("click", () => {
     });
 });
 
+resetAppearanceButton.addEventListener("click", () => {
+  if (!draftSettings || !settingsSnapshot) {
+    return;
+  }
+
+  confirmSettingsAction("Reset appearance to defaults?", "Reset")
+    .then((confirmed) => {
+      if (!confirmed || !draftSettings || !settingsSnapshot) {
+        return;
+      }
+
+      draftSettings.appearance = { ...settingsSnapshot.defaults.appearance };
+      renderSettingsModal();
+    })
+    .catch((error) => {
+      showSettingsStatus(error instanceof Error ? error.message : "Failed to reset appearance.", true);
+    });
+});
+
+resetFeaturesButton.addEventListener("click", () => {
+  if (!draftSettings || !settingsSnapshot) {
+    return;
+  }
+
+  confirmSettingsAction("Reset feature settings to defaults?", "Reset")
+    .then((confirmed) => {
+      if (!confirmed || !draftSettings || !settingsSnapshot) {
+        return;
+      }
+
+      draftSettings.features = cloneFeatures(settingsSnapshot.defaults.features);
+      renderSettingsModal();
+    })
+    .catch((error) => {
+      showSettingsStatus(error instanceof Error ? error.message : "Failed to reset features.", true);
+    });
+});
+
+clearHistoryButton.addEventListener("click", () => {
+  confirmSettingsAction("Clear all command history?", "Delete")
+    .then((confirmed) => {
+      if (!confirmed) {
+        return;
+      }
+
+      return window.terminalApi.clearCommandHistory().then((entries) => {
+        commandHistory = entries;
+        updateActiveSuggestion();
+        showSettingsStatus("Command history cleared.");
+      });
+    })
+    .catch((error) => {
+      showSettingsStatus(error instanceof Error ? error.message : "Failed to clear command history.", true);
+    });
+});
+
 checkUpdatesButton.addEventListener("click", () => {
   checkForUpdates().catch((error) => {
     showSettingsStatus(error instanceof Error ? error.message : "Failed to check for updates.", true);
@@ -338,6 +433,7 @@ init().catch((error) => {
 
 async function init(): Promise<void> {
   await reloadSettings();
+  commandHistory = await window.terminalApi.listCommandHistory();
   renderQuickCommands();
   await createTab();
 }
@@ -365,12 +461,17 @@ async function createTab(): Promise<void> {
 }
 
 function attachTerminal(tab: TerminalTab): void {
-  const view = createTerminalView(tab);
+  const view = createTerminalView(tab, getActiveAppearance());
 
   tabs.set(tab.id, view);
   terminalHost.append(view.element);
   view.terminal.open(view.element);
+  inputStates.set(tab.id, createTerminalInputState(view));
+  view.terminal.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(tab.id, event));
   view.terminal.onData((data) => {
+    if (handleTerminalInputData(tab.id, data)) {
+      return;
+    }
     window.terminalApi.writeTerminal({ id: tab.id, data });
   });
   view.terminal.onResize(({ cols, rows }) => {
@@ -422,6 +523,7 @@ function closeTab(id: string): void {
   view.terminal.dispose();
   view.element.remove();
   tabs.delete(id);
+  inputStates.delete(id);
 
   if (activeTabId === id) {
     const nextId = tabs.keys().next().value as string | undefined;
@@ -570,6 +672,20 @@ async function runCommand(command: QuickCommand): Promise<void> {
     return;
   }
 
+  if (command.runMode !== "insert") {
+    recordCommandIfEligible(activeTabId, command.command).catch((error) => {
+      console.warn("Failed to record command history", error);
+    });
+    const state = inputStates.get(activeTabId);
+    if (state) {
+      state.line = "";
+      state.cursor = 0;
+      state.dismissedSuggestionFor = "";
+      state.suggestion = null;
+      hideSuggestion(state);
+    }
+  }
+
   window.terminalApi.writeTerminal({
     id: activeTabId,
     data: command.runMode === "insert" ? command.command : `${command.command}\r`
@@ -689,8 +805,12 @@ function renderSettingsModal(): void {
 
   settingsCommandsPanel.classList.toggle("is-active", settingsTab === "commands");
   settingsShortcutsPanel.classList.toggle("is-active", settingsTab === "shortcuts");
+  settingsAppearancePanel.classList.toggle("is-active", settingsTab === "appearance");
+  settingsFeaturesPanel.classList.toggle("is-active", settingsTab === "features");
   renderCommandEditor();
   renderShortcutEditor();
+  renderAppearanceEditor();
+  renderFeaturesEditor();
   updateSaveState();
 }
 
@@ -843,6 +963,814 @@ function renderShortcutEditor(): void {
   }
 }
 
+function renderAppearanceEditor(): void {
+  if (!draftSettings) {
+    return;
+  }
+
+  appearanceEditorElement.replaceChildren(
+    createAppearanceTextRow("Font family", "fontFamily", draftSettings.appearance.fontFamily, "CSS font-family list"),
+    createAppearanceNumberRow("Font size", "fontSize", draftSettings.appearance.fontSize, 10, 28, 1, "10-28 px"),
+    createAppearanceNumberRow(
+      "Letter spacing",
+      "letterSpacing",
+      draftSettings.appearance.letterSpacing,
+      -1,
+      4,
+      0.1,
+      "-1 to 4 px"
+    ),
+    createAppearanceNumberRow("Line height", "lineHeight", draftSettings.appearance.lineHeight, 1, 1.8, 0.05, "1.0-1.8")
+  );
+}
+
+function renderFeaturesEditor(): void {
+  if (!draftSettings) {
+    return;
+  }
+
+  featuresEditorElement.replaceChildren(
+    createFeatureCheckboxRow(
+      "Command History",
+      "Save executed commands for suggestions and search",
+      draftSettings.features.commandHistory.enabled,
+      (checked) => {
+        if (!draftSettings) {
+          return;
+        }
+        draftSettings.features.commandHistory.enabled = checked;
+      }
+    ),
+    createFeatureNumberRow(
+      "Max History",
+      "Number of unique command and directory pairs to keep",
+      draftSettings.features.commandHistory.maxEntries,
+      100,
+      50000,
+      100
+    ),
+    createFeatureCheckboxRow(
+      "Autosuggestions",
+      "Show the best matching command as ghost text",
+      draftSettings.features.autosuggestions.enabled,
+      (checked) => {
+        if (!draftSettings) {
+          return;
+        }
+        draftSettings.features.autosuggestions.enabled = checked;
+      }
+    ),
+    createFeatureCheckboxRow(
+      "Accept With Tab",
+      "Use Tab for autosuggestions instead of passing it to the shell",
+      draftSettings.features.autosuggestions.acceptWithTab,
+      (checked) => {
+        if (!draftSettings) {
+          return;
+        }
+        draftSettings.features.autosuggestions.acceptWithTab = checked;
+      }
+    )
+  );
+}
+
+function createFeatureCheckboxRow(
+  labelText: string,
+  hintText: string,
+  checked: boolean,
+  onChange: (checked: boolean) => void
+): HTMLDivElement {
+  const label = document.createElement("label");
+  label.className = "settings-checkbox-label";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = checked;
+  input.addEventListener("change", () => {
+    onChange(input.checked);
+    updateSaveState();
+  });
+  const text = document.createElement("span");
+  text.textContent = checked ? "Enabled" : "Disabled";
+  input.addEventListener("change", () => {
+    text.textContent = input.checked ? "Enabled" : "Disabled";
+  });
+  label.append(input, text);
+
+  return createFeatureRow(labelText, hintText, label);
+}
+
+function createFeatureNumberRow(
+  labelText: string,
+  hintText: string,
+  value: number,
+  min: number,
+  max: number,
+  step: number
+): HTMLDivElement {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.className = "settings-input";
+  input.value = String(value);
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.addEventListener("input", () => {
+    if (!draftSettings) {
+      return;
+    }
+
+    const nextValue = Number(input.value);
+    if (Number.isFinite(nextValue)) {
+      draftSettings.features.commandHistory.maxEntries = clamp(nextValue, min, max);
+    }
+    updateSaveState();
+  });
+
+  return createFeatureRow(labelText, hintText, input);
+}
+
+function createFeatureRow(labelText: string, hintText: string, control: HTMLElement): HTMLDivElement {
+  const row = document.createElement("div");
+  row.className = "features-editor-row";
+
+  const label = document.createElement("div");
+  label.className = "features-editor-label";
+  label.textContent = labelText;
+  const hint = document.createElement("div");
+  hint.className = "features-editor-hint";
+  hint.textContent = hintText;
+  const text = document.createElement("div");
+  text.append(label, hint);
+
+  row.append(text, control);
+  return row;
+}
+
+function createAppearanceTextRow(
+  labelText: string,
+  key: keyof Pick<AppearanceSettings, "fontFamily">,
+  value: string,
+  hintText: string
+): HTMLDivElement {
+  const input = createTextInput(value, labelText);
+  input.maxLength = 160;
+  input.addEventListener("input", () => {
+    if (!draftSettings) {
+      return;
+    }
+
+    draftSettings.appearance[key] = input.value;
+    updateSaveState();
+  });
+
+  return createAppearanceRow(labelText, hintText, input);
+}
+
+function createAppearanceNumberRow(
+  labelText: string,
+  key: keyof Pick<AppearanceSettings, "fontSize" | "letterSpacing" | "lineHeight">,
+  value: number,
+  min: number,
+  max: number,
+  step: number,
+  hintText: string
+): HTMLDivElement {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.className = "settings-input";
+  input.value = String(value);
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.addEventListener("input", () => {
+    if (!draftSettings) {
+      return;
+    }
+
+    const nextValue = Number(input.value);
+    if (Number.isFinite(nextValue)) {
+      draftSettings.appearance[key] = key === "fontSize" ? clamp(nextValue, min, max) : clampFloat(nextValue, min, max);
+    }
+    updateSaveState();
+  });
+
+  return createAppearanceRow(labelText, hintText, input);
+}
+
+function createAppearanceRow(labelText: string, hintText: string, control: HTMLElement): HTMLDivElement {
+  const row = document.createElement("div");
+  row.className = "appearance-editor-row";
+
+  const label = document.createElement("label");
+  label.className = "appearance-editor-label";
+  const labelId = `appearance-${labelText.toLowerCase().replaceAll(/\s+/g, "-")}`;
+  control.id = labelId;
+  label.htmlFor = labelId;
+  label.textContent = labelText;
+
+  const text = document.createElement("div");
+  const hint = document.createElement("div");
+  hint.className = "appearance-editor-hint";
+  hint.textContent = hintText;
+  text.append(label, hint);
+
+  row.append(text, control);
+  return row;
+}
+
+function createTerminalInputState(view: RendererTerminalTab): TerminalInputState {
+  const suggestionOverlay = document.createElement("div");
+  suggestionOverlay.className = "suggestion-overlay";
+  const historyPanel = document.createElement("div");
+  historyPanel.className = "history-search-panel";
+  const historyInput = document.createElement("input");
+  historyInput.type = "text";
+  historyInput.className = "history-search-input";
+  historyInput.placeholder = "Search command history";
+  const historyResults = document.createElement("div");
+  historyResults.className = "history-search-results";
+  historyPanel.append(historyInput, historyResults);
+  view.element.append(suggestionOverlay, historyPanel);
+
+  historyInput.addEventListener("input", () => {
+    if (!activeHistorySearch || activeHistorySearch.tabId !== view.metadata.id) {
+      return;
+    }
+
+    activeHistorySearch.query = historyInput.value;
+    activeHistorySearch.selectedIndex = 0;
+    activeHistorySearch.results = getHistorySearchResults(historyInput.value);
+    renderHistorySearch();
+  });
+
+  return {
+    line: "",
+    cursor: 0,
+    dismissedSuggestionFor: "",
+    suggestion: null,
+    suggestionOverlay,
+    historyPanel,
+    historyInput,
+    historyResults
+  };
+}
+
+function handleTerminalKeyEvent(tabId: string, event: KeyboardEvent): boolean {
+  if (event.type !== "keydown" || isSettingsOpen()) {
+    return true;
+  }
+
+  const state = inputStates.get(tabId);
+  if (!state) {
+    return true;
+  }
+
+  if (activeHistorySearch) {
+    return activeHistorySearch.tabId !== tabId;
+  }
+
+  if (isTabInAlternateBuffer(tabId)) {
+    return true;
+  }
+
+  if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "r") {
+    openHistorySearch(tabId);
+    return false;
+  }
+
+  if (event.key === "Escape") {
+    state.dismissedSuggestionFor = state.line;
+    updateSuggestion(tabId);
+    return true;
+  }
+
+  if (!state.suggestion) {
+    return true;
+  }
+
+  const shouldAcceptAll =
+    (event.key === "ArrowRight" && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) ||
+    (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "f") ||
+    (appSettings?.features.autosuggestions.acceptWithTab === true && event.key === "Tab");
+  if (shouldAcceptAll && isCursorAtTrackedLineEnd(tabId)) {
+    acceptSuggestion(tabId, "all");
+    return false;
+  }
+
+  if (event.key === "ArrowRight" && event.ctrlKey && !event.metaKey && !event.altKey && isCursorAtTrackedLineEnd(tabId)) {
+    acceptSuggestion(tabId, "partial");
+    return false;
+  }
+
+  return true;
+}
+
+function handleTerminalInputData(tabId: string, data: string): boolean {
+  const state = inputStates.get(tabId);
+  const view = tabs.get(tabId);
+  if (!state || !view || activeHistorySearch?.tabId === tabId) {
+    return false;
+  }
+
+  if (isTabInAlternateBuffer(tabId)) {
+    state.line = "";
+    state.cursor = 0;
+    state.dismissedSuggestionFor = "";
+    state.suggestion = null;
+    hideSuggestion(state);
+    return false;
+  }
+
+  if (data === "\x06" && state.suggestion) {
+    acceptSuggestion(tabId, "all");
+    return true;
+  }
+
+  if (data === "\x12") {
+    openHistorySearch(tabId);
+    return true;
+  }
+
+  if (data === "\r") {
+    const command = state.line;
+    state.line = "";
+    state.cursor = 0;
+    state.dismissedSuggestionFor = "";
+    state.suggestion = null;
+    hideSuggestion(state);
+    recordCommandIfEligible(tabId, command).catch((error) => {
+      console.warn("Failed to record command history", error);
+    });
+    return false;
+  }
+
+  if (data === "\x7f") {
+    if (state.cursor > 0) {
+      state.line = `${state.line.slice(0, state.cursor - 1)}${state.line.slice(state.cursor)}`;
+      state.cursor -= 1;
+    }
+    state.dismissedSuggestionFor = "";
+    state.suggestion = null;
+    hideSuggestion(state);
+    return false;
+  }
+
+  if (data === "\x15") {
+    state.line = "";
+    state.cursor = 0;
+    state.dismissedSuggestionFor = "";
+    state.suggestion = null;
+    hideSuggestion(state);
+    return false;
+  }
+
+  if (data === "\x03" || data === "\x04") {
+    state.line = "";
+    state.cursor = 0;
+    state.dismissedSuggestionFor = "";
+    state.suggestion = null;
+    hideSuggestion(state);
+    return false;
+  }
+
+  if (isPrintableInput(data)) {
+    state.line = `${state.line.slice(0, state.cursor)}${data}${state.line.slice(state.cursor)}`;
+    state.cursor += data.length;
+    state.dismissedSuggestionFor = "";
+    state.suggestion = null;
+    hideSuggestion(state);
+    return false;
+  }
+
+  if (data.startsWith("\x1b")) {
+    updateTrackedCursor(state, data);
+    state.dismissedSuggestionFor = state.line;
+    state.suggestion = null;
+    hideSuggestion(state);
+  }
+
+  return false;
+}
+
+async function recordCommandIfEligible(tabId: string, rawCommand: string): Promise<void> {
+  if (!appSettings?.features.commandHistory.enabled) {
+    return;
+  }
+
+  const command = rawCommand.trimEnd();
+  if (command.trim().length === 0 || command.startsWith(" ") || isTabInAlternateBuffer(tabId)) {
+    return;
+  }
+
+  const view = tabs.get(tabId);
+  commandHistory = await window.terminalApi.recordCommandHistory({
+    command,
+    cwd: view?.metadata.cwd,
+    maxEntries: appSettings.features.commandHistory.maxEntries
+  });
+}
+
+function updateActiveSuggestion(): void {
+  if (!activeTabId) {
+    return;
+  }
+  updateSuggestion(activeTabId);
+}
+
+function scheduleSuggestionUpdate(tabId: string): void {
+  window.requestAnimationFrame(() => {
+    updateSuggestion(tabId);
+  });
+}
+
+function updateSuggestion(tabId: string): void {
+  const state = inputStates.get(tabId);
+  if (!state || tabId !== activeTabId || !appSettings?.features.autosuggestions.enabled) {
+    if (state) {
+      state.suggestion = null;
+      hideSuggestion(state);
+    }
+    return;
+  }
+
+  if (
+    state.line.length === 0 ||
+    state.cursor !== state.line.length ||
+    state.dismissedSuggestionFor === state.line ||
+    isTabInAlternateBuffer(tabId)
+  ) {
+    state.suggestion = null;
+    hideSuggestion(state);
+    return;
+  }
+
+  const suggestion = getBestSuggestion(tabId, state.line);
+  state.suggestion = suggestion;
+  if (!suggestion) {
+    hideSuggestion(state);
+    return;
+  }
+
+  renderSuggestion(tabId, suggestion.command.slice(state.line.length));
+}
+
+function getBestSuggestion(tabId: string, prefix: string): CommandHistoryEntry | null {
+  const view = tabs.get(tabId);
+  const sameCwd = view?.metadata.cwd;
+  const matches = commandHistory
+    .filter((entry) => entry.command.startsWith(prefix) && entry.command !== prefix)
+    .sort((left, right) => {
+      const leftSameCwd = left.cwd === sameCwd ? 1 : 0;
+      const rightSameCwd = right.cwd === sameCwd ? 1 : 0;
+      if (leftSameCwd !== rightSameCwd) {
+        return rightSameCwd - leftSameCwd;
+      }
+      return right.lastRunAt.localeCompare(left.lastRunAt);
+    });
+
+  return matches[0] ?? null;
+}
+
+function renderSuggestion(tabId: string, suffix: string): void {
+  const state = inputStates.get(tabId);
+  const view = tabs.get(tabId);
+  if (!state || !view || suffix.length === 0) {
+    if (state) {
+      hideSuggestion(state);
+    }
+    return;
+  }
+
+  const cell = estimateTerminalCellSize(view);
+  const origin = getTerminalScreenOrigin(view);
+  state.suggestionOverlay.textContent = suffix;
+  state.suggestionOverlay.style.fontFamily = view.terminal.options.fontFamily ?? "";
+  state.suggestionOverlay.style.fontSize = `${view.terminal.options.fontSize ?? 13}px`;
+  state.suggestionOverlay.style.letterSpacing = `${view.terminal.options.letterSpacing ?? 0}px`;
+  state.suggestionOverlay.style.lineHeight = `${cell.height}px`;
+  state.suggestionOverlay.style.left = `${origin.left + view.terminal.buffer.active.cursorX * cell.width}px`;
+  state.suggestionOverlay.style.top = `${origin.top + view.terminal.buffer.active.cursorY * cell.height}px`;
+  state.suggestionOverlay.classList.add("is-visible");
+}
+
+function hideSuggestion(state: TerminalInputState): void {
+  state.suggestionOverlay.classList.remove("is-visible");
+}
+
+function acceptSuggestion(tabId: string, mode: "all" | "partial"): void {
+  const state = inputStates.get(tabId);
+  if (!state?.suggestion) {
+    return;
+  }
+
+  const suffix = state.suggestion.command.slice(state.line.length);
+  const accepted = mode === "all" ? suffix : getPartialSuggestionSuffix(suffix);
+  if (accepted.length === 0) {
+    return;
+  }
+
+  state.line += accepted;
+  state.cursor = state.line.length;
+  state.dismissedSuggestionFor = "";
+  window.terminalApi.writeTerminal({ id: tabId, data: accepted });
+  state.suggestion = null;
+  hideSuggestion(state);
+}
+
+function getPartialSuggestionSuffix(suffix: string): string {
+  const firstBoundary = suffix.slice(1).search(/[\s/]/);
+  if (firstBoundary === -1) {
+    return suffix;
+  }
+  return suffix.slice(0, firstBoundary + 2);
+}
+
+function openHistorySearch(tabId: string): void {
+  if (!appSettings?.features.commandHistory.enabled) {
+    return;
+  }
+
+  const state = inputStates.get(tabId);
+  if (!state) {
+    return;
+  }
+
+  state.suggestion = null;
+  hideSuggestion(state);
+  activeHistorySearch = {
+    tabId,
+    query: state.line,
+    selectedIndex: 0,
+    results: getHistorySearchResults(state.line)
+  };
+  state.historyInput.value = state.line;
+  renderHistorySearch();
+  state.historyPanel.classList.add("is-open");
+  state.historyInput.focus();
+}
+
+function closeHistorySearch(): void {
+  if (!activeHistorySearch) {
+    return;
+  }
+
+  const state = inputStates.get(activeHistorySearch.tabId);
+  const tabId = activeHistorySearch.tabId;
+  if (state) {
+    state.historyPanel.classList.remove("is-open");
+    state.historyResults.replaceChildren();
+  }
+  activeHistorySearch = null;
+  tabs.get(tabId)?.terminal.focus();
+  if (state) {
+    state.suggestion = null;
+    hideSuggestion(state);
+  }
+}
+
+function handleHistorySearchKeydown(event: KeyboardEvent): void {
+  if (!activeHistorySearch) {
+    return;
+  }
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeHistorySearch();
+    return;
+  }
+
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    activeHistorySearch.selectedIndex = Math.min(
+      activeHistorySearch.results.length - 1,
+      activeHistorySearch.selectedIndex + 1
+    );
+    renderHistorySearch();
+    return;
+  }
+
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    activeHistorySearch.selectedIndex = Math.max(0, activeHistorySearch.selectedIndex - 1);
+    renderHistorySearch();
+    return;
+  }
+
+  if (event.key === "Enter") {
+    event.preventDefault();
+    const entry = activeHistorySearch.results[activeHistorySearch.selectedIndex];
+    if (entry) {
+      replaceCurrentLine(activeHistorySearch.tabId, entry.command, event.metaKey || event.ctrlKey);
+    }
+    closeHistorySearch();
+  }
+}
+
+function getHistorySearchResults(query: string): CommandHistoryEntry[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  const scored = commandHistory
+    .map((entry) => ({ entry, score: scoreHistoryEntry(entry, normalizedQuery) }))
+    .filter((item) => item.score >= 0)
+    .sort((left, right) => {
+      if (left.score !== right.score) {
+        return left.score - right.score;
+      }
+      return right.entry.lastRunAt.localeCompare(left.entry.lastRunAt);
+    });
+
+  return scored.slice(0, historySearchResultLimit).map((item) => item.entry);
+}
+
+function scoreHistoryEntry(entry: CommandHistoryEntry, query: string): number {
+  if (query.length === 0) {
+    return 0;
+  }
+
+  const command = entry.command.toLowerCase();
+  const cwd = entry.cwd?.toLowerCase() ?? "";
+  if (command.startsWith(query)) {
+    return 0;
+  }
+  if (command.includes(query)) {
+    return 1;
+  }
+  if (cwd.includes(query)) {
+    return 2;
+  }
+  if (isFuzzyMatch(command, query)) {
+    return 3;
+  }
+  return -1;
+}
+
+function renderHistorySearch(): void {
+  if (!activeHistorySearch) {
+    return;
+  }
+
+  const state = inputStates.get(activeHistorySearch.tabId);
+  if (!state) {
+    return;
+  }
+
+  state.historyResults.replaceChildren();
+  for (const [index, entry] of activeHistorySearch.results.entries()) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "history-search-result";
+    button.classList.toggle("is-selected", index === activeHistorySearch.selectedIndex);
+    button.addEventListener("mouseenter", () => {
+      if (!activeHistorySearch) {
+        return;
+      }
+      activeHistorySearch.selectedIndex = index;
+      renderHistorySearch();
+    });
+    button.addEventListener("click", () => {
+      replaceCurrentLine(activeHistorySearch?.tabId ?? "", entry.command, false);
+      closeHistorySearch();
+    });
+
+    const content = document.createElement("div");
+    const command = document.createElement("div");
+    command.className = "history-search-command";
+    command.textContent = entry.command;
+    const meta = document.createElement("div");
+    meta.className = "history-search-meta";
+    meta.textContent = [entry.cwd, formatLastRun(entry.lastRunAt)].filter(Boolean).join(" | ");
+    content.append(command, meta);
+
+    const count = document.createElement("div");
+    count.className = "history-search-count";
+    count.textContent = `${entry.runCount}x`;
+    button.append(content, count);
+    state.historyResults.append(button);
+  }
+}
+
+function replaceCurrentLine(tabId: string, command: string, run: boolean): void {
+  const state = inputStates.get(tabId);
+  if (!state) {
+    return;
+  }
+
+  const data = `${"\x7f".repeat(state.line.length)}${command}${run ? "\r" : ""}`;
+  state.line = run ? "" : command;
+  state.cursor = state.line.length;
+  state.dismissedSuggestionFor = "";
+  window.terminalApi.writeTerminal({ id: tabId, data });
+  if (run) {
+    recordCommandIfEligible(tabId, command).catch((error) => {
+      console.warn("Failed to record command history", error);
+    });
+  }
+}
+
+function isPrintableInput(data: string): boolean {
+  return !data.includes("\x1b") && !data.includes("\r") && !data.includes("\n") && /^[^\x00-\x1f\x7f]+$/.test(data);
+}
+
+function updateTrackedCursor(state: TerminalInputState, data: string): void {
+  if (data === "\x1b[D") {
+    state.cursor = Math.max(0, state.cursor - 1);
+  } else if (data === "\x1b[C") {
+    state.cursor = Math.min(state.line.length, state.cursor + 1);
+  } else if (data === "\x1b[H" || data === "\x1b[1~") {
+    state.cursor = 0;
+  } else if (data === "\x1b[F" || data === "\x1b[4~") {
+    state.cursor = state.line.length;
+  }
+}
+
+function isCursorAtTrackedLineEnd(tabId: string): boolean {
+  const state = inputStates.get(tabId);
+  const view = tabs.get(tabId);
+  if (!state || !view) {
+    return false;
+  }
+  return state.cursor === state.line.length;
+}
+
+function isTabInAlternateBuffer(tabId: string): boolean {
+  const view = tabs.get(tabId);
+  return view?.terminal.buffer.active.type === "alternate";
+}
+
+function estimateTerminalCellSize(view: RendererTerminalTab): { width: number; height: number } {
+  const dimensions = getXtermRenderDimensions(view);
+  if (dimensions) {
+    return dimensions;
+  }
+
+  const fontSize = view.terminal.options.fontSize ?? 13;
+  const lineHeight = view.terminal.options.lineHeight ?? 1.2;
+  const letterSpacing = view.terminal.options.letterSpacing ?? 0;
+  return {
+    width: fontSize * 0.62 + letterSpacing,
+    height: fontSize * lineHeight
+  };
+}
+
+function getTerminalScreenOrigin(view: RendererTerminalTab): { left: number; top: number } {
+  const screen = view.element.querySelector<HTMLElement>(".xterm-screen");
+  if (!screen) {
+    return { left: 0, top: 0 };
+  }
+
+  const paneRect = view.element.getBoundingClientRect();
+  const screenRect = screen.getBoundingClientRect();
+  return {
+    left: screenRect.left - paneRect.left,
+    top: screenRect.top - paneRect.top
+  };
+}
+
+function getXtermRenderDimensions(view: RendererTerminalTab): { width: number; height: number } | null {
+  const terminalWithCore = view.terminal as unknown as {
+    _core?: {
+      _renderService?: {
+        dimensions?: {
+          css?: {
+            cell?: {
+              width?: number;
+              height?: number;
+            };
+          };
+        };
+      };
+    };
+  };
+  const cell = terminalWithCore._core?._renderService?.dimensions?.css?.cell;
+  if (!cell?.width || !cell.height) {
+    return null;
+  }
+
+  return {
+    width: cell.width,
+    height: cell.height
+  };
+}
+
+function isFuzzyMatch(value: string, query: string): boolean {
+  let cursor = 0;
+  for (const char of query) {
+    cursor = value.indexOf(char, cursor);
+    if (cursor === -1) {
+      return false;
+    }
+    cursor += 1;
+  }
+  return true;
+}
+
+function formatLastRun(lastRunAt: string): string {
+  const timestamp = Number(lastRunAt);
+  if (!Number.isFinite(timestamp)) {
+    return "";
+  }
+  return new Date(timestamp).toLocaleString();
+}
+
 function handleShortcutRecording(event: KeyboardEvent): void {
   event.preventDefault();
   event.stopPropagation();
@@ -903,6 +1831,8 @@ async function saveSettings(): Promise<void> {
     appSettings = cloneSettings(snapshot.settings);
     draftSettings = cloneSettings(snapshot.settings);
     renderQuickCommands();
+    applyAppearanceToTerminalViews(appSettings.appearance);
+    updateActiveSuggestion();
     renderSettingsModal();
     showSettingsNotice(snapshot.notice ?? "");
 
@@ -952,6 +1882,32 @@ function validateSettings(settings: AppSettings): ValidationResult {
       messages.push(`Duplicate command id: ${command.id}.`);
     }
     commandIds.add(command.id);
+  }
+
+  if (settings.appearance.fontFamily.trim().length === 0) {
+    messages.push("Font family cannot be empty.");
+  }
+
+  if (settings.appearance.fontFamily.length > 160) {
+    messages.push("Font family must be 160 characters or fewer.");
+  }
+
+  if (!isInRange(settings.appearance.fontSize, 10, 28)) {
+    messages.push("Font size must be between 10 and 28.");
+  }
+
+  if (!isInRange(settings.appearance.letterSpacing, -1, 4)) {
+    messages.push("Letter spacing must be between -1 and 4.");
+  }
+
+  if (!isInRange(settings.appearance.lineHeight, 1, 1.8)) {
+    messages.push("Line height must be between 1.0 and 1.8.");
+  }
+
+  if (!Number.isInteger(settings.features.commandHistory.maxEntries)) {
+    messages.push("Max history must be a whole number.");
+  } else if (!isInRange(settings.features.commandHistory.maxEntries, 100, 50000)) {
+    messages.push("Max history must be between 100 and 50000.");
   }
 
   const actions = getShortcutActions(settings);
@@ -1288,12 +2244,53 @@ function cloneSettings(settings: AppSettings): AppSettings {
     ),
     layout: {
       commandPanelWidth: settings.layout.commandPanelWidth
-    }
+    },
+    appearance: {
+      ...settings.appearance
+    },
+    features: cloneFeatures(settings.features)
+  };
+}
+
+function cloneFeatures(features: FeatureSettings): FeatureSettings {
+  return {
+    commandHistory: { ...features.commandHistory },
+    autosuggestions: { ...features.autosuggestions }
   };
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function clampFloat(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function isInRange(value: number, min: number, max: number): boolean {
+  return Number.isFinite(value) && value >= min && value <= max;
+}
+
+function getActiveAppearance(): AppearanceSettings {
+  return (
+    appSettings?.appearance ?? {
+      fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace",
+      fontSize: 13,
+      letterSpacing: 0,
+      lineHeight: 1.2
+    }
+  );
+}
+
+function applyAppearanceToTerminalViews(appearance: AppearanceSettings): void {
+  for (const view of tabs.values()) {
+    view.terminal.options.fontFamily = appearance.fontFamily;
+    view.terminal.options.fontSize = appearance.fontSize;
+    view.terminal.options.letterSpacing = appearance.letterSpacing;
+    view.terminal.options.lineHeight = appearance.lineHeight;
+  }
+
+  scheduleFitActiveTerminal();
 }
 
 function createTextInput(value: string, placeholder: string): HTMLInputElement {

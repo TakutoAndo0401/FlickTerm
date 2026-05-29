@@ -50,10 +50,42 @@ pub struct LayoutSettings {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AppearanceSettings {
+    pub font_family: String,
+    pub font_size: u16,
+    pub letter_spacing: f64,
+    pub line_height: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandHistorySettings {
+    pub enabled: bool,
+    pub max_entries: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutosuggestionSettings {
+    pub enabled: bool,
+    pub accept_with_tab: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureSettings {
+    pub command_history: CommandHistorySettings,
+    pub autosuggestions: AutosuggestionSettings,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub commands: Vec<QuickCommand>,
     pub shortcuts: HashMap<String, ShortcutBinding>,
     pub layout: LayoutSettings,
+    pub appearance: AppearanceSettings,
+    pub features: FeatureSettings,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -122,4 +154,24 @@ pub struct TerminalExitEvent {
     pub id: String,
     pub exit_code: i32,
     pub signal: Option<i32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandHistoryEntry {
+    pub command: String,
+    pub cwd: Option<String>,
+    pub run_count: u32,
+    pub first_run_at: String,
+    pub last_run_at: String,
+    pub last_exit_code: Option<i32>,
+    pub last_duration_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandHistoryRecordRequest {
+    pub command: String,
+    pub cwd: Option<String>,
+    pub max_entries: usize,
 }

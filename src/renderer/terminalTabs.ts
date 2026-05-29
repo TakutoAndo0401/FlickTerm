@@ -1,6 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import type { TerminalTab } from "../shared/terminalTypes";
+import type { AppearanceSettings, TerminalTab } from "../shared/terminalTypes";
 
 export type RendererTerminalTab = {
   metadata: TerminalTab;
@@ -9,12 +9,13 @@ export type RendererTerminalTab = {
   element: HTMLDivElement;
 };
 
-export function createTerminalView(tab: TerminalTab): RendererTerminalTab {
+export function createTerminalView(tab: TerminalTab, appearance: AppearanceSettings): RendererTerminalTab {
   const terminal = new Terminal({
     cursorBlink: true,
-    fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace",
-    fontSize: 13,
-    lineHeight: 1.2,
+    fontFamily: appearance.fontFamily,
+    fontSize: appearance.fontSize,
+    letterSpacing: appearance.letterSpacing,
+    lineHeight: appearance.lineHeight,
     scrollback: 4000,
     theme: {
       background: "#111315",
