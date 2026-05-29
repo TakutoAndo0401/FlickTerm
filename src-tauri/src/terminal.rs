@@ -17,6 +17,10 @@ use thiserror::Error;
 
 const INITIAL_COLS: u16 = 80;
 const INITIAL_ROWS: u16 = 24;
+const MAX_COLS: u16 = 500;
+const MAX_ROWS: u16 = 200;
+const MAX_TERMINAL_ID_LEN: usize = 80;
+const MAX_TERMINAL_WRITE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum PtyError {
@@ -26,6 +30,8 @@ pub enum PtyError {
     Missing(String),
     #[error("PTY lock was poisoned.")]
     Lock,
+    #[error("Invalid terminal request: {0}")]
+    Invalid(String),
     #[error("Failed to spawn terminal: {0}")]
     Spawn(String),
     #[error("Failed to write to terminal: {0}")]
@@ -56,6 +62,8 @@ impl PtyManager {
         request: CreateTerminalRequest,
         app: AppHandle,
     ) -> Result<TerminalTab, PtyError> {
+        validate_terminal_id(&request.id)?;
+
         {
             let sessions = self.sessions.lock().map_err(|_| PtyError::Lock)?;
             if sessions.contains_key(&request.id) {
@@ -63,20 +71,23 @@ impl PtyManager {
             }
         }
 
-        let shell = resolve_shell(request.shell.as_deref());
-        let title = request.title.clone().unwrap_or_else(|| shell_title(&shell));
+        let shell = resolve_shell();
+        let title = normalize_title(request.title.as_deref(), &shell);
+        let cwd = dirs::home_dir();
         let tab = TerminalTab {
             id: request.id.clone(),
             title,
             shell: shell.clone(),
-            cwd: request.cwd.clone(),
+            cwd: cwd
+                .as_ref()
+                .and_then(|path| path.to_str().map(String::from)),
         };
 
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
-                rows: request.rows.unwrap_or(INITIAL_ROWS),
-                cols: request.cols.unwrap_or(INITIAL_COLS),
+                rows: normalize_size(request.rows, INITIAL_ROWS, MAX_ROWS),
+                cols: normalize_size(request.cols, INITIAL_COLS, MAX_COLS),
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -86,10 +97,8 @@ impl PtyManager {
         if should_start_as_login_shell(&shell) {
             command.arg("-l");
         }
-        if let Some(cwd) = &request.cwd {
+        if let Some(cwd) = &cwd {
             command.cwd(cwd);
-        } else if let Some(home) = dirs::home_dir() {
-            command.cwd(home);
         }
         for (key, value) in env::vars() {
             command.env(key, value);
@@ -134,6 +143,11 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: &str, data: &str) -> Result<(), PtyError> {
+        validate_terminal_id(id)?;
+        if data.len() > MAX_TERMINAL_WRITE_BYTES {
+            return Err(PtyError::Invalid("terminal input is too large".to_string()));
+        }
+
         let writer = {
             let sessions = self.sessions.lock().map_err(|_| PtyError::Lock)?;
             sessions
@@ -150,10 +164,13 @@ impl PtyManager {
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), PtyError> {
+        validate_terminal_id(id)?;
         if cols < 1 || rows < 1 {
             return Ok(());
         }
 
+        let cols = cols.min(MAX_COLS);
+        let rows = rows.min(MAX_ROWS);
         let sessions = self.sessions.lock().map_err(|_| PtyError::Lock)?;
         let session = sessions
             .get(id)
@@ -171,6 +188,7 @@ impl PtyManager {
     }
 
     pub fn kill(&self, id: &str) -> Result<(), PtyError> {
+        validate_terminal_id(id)?;
         let session = {
             let mut sessions = self.sessions.lock().map_err(|_| PtyError::Lock)?;
             match sessions.remove(id) {
@@ -257,11 +275,33 @@ impl PtyManager {
     }
 }
 
-fn resolve_shell(shell: Option<&str>) -> String {
-    if let Some(shell) = shell.filter(|value| !value.trim().is_empty()) {
-        return shell.to_string();
-    }
+fn validate_terminal_id(id: &str) -> Result<(), PtyError> {
+    let is_valid = !id.is_empty()
+        && id.len() <= MAX_TERMINAL_ID_LEN
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
 
+    if is_valid {
+        Ok(())
+    } else {
+        Err(PtyError::Invalid("terminal id is invalid".to_string()))
+    }
+}
+
+fn normalize_title(title: Option<&str>, shell: &str) -> String {
+    title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(80).collect())
+        .unwrap_or_else(|| shell_title(shell))
+}
+
+fn normalize_size(value: Option<u16>, default_value: u16, max_value: u16) -> u16 {
+    value.unwrap_or(default_value).clamp(1, max_value)
+}
+
+fn resolve_shell() -> String {
     if cfg!(windows) {
         return env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".to_string());
     }
@@ -349,6 +389,34 @@ mod tests {
     fn does_not_add_login_flag_to_unknown_shells() {
         assert!(!should_start_as_login_shell("/bin/sh"));
         assert!(!should_start_as_login_shell("/usr/bin/false"));
+    }
+
+    #[test]
+    fn accepts_only_bounded_ascii_terminal_ids() {
+        assert!(validate_terminal_id("terminal-abc_123").is_ok());
+        assert!(validate_terminal_id("").is_err());
+        assert!(validate_terminal_id("terminal/abc").is_err());
+        assert!(validate_terminal_id(&"a".repeat(MAX_TERMINAL_ID_LEN + 1)).is_err());
+    }
+
+    #[test]
+    fn clamps_requested_terminal_size() {
+        assert_eq!(normalize_size(None, INITIAL_COLS, MAX_COLS), INITIAL_COLS);
+        assert_eq!(normalize_size(Some(0), INITIAL_COLS, MAX_COLS), 1);
+        assert_eq!(
+            normalize_size(Some(MAX_COLS + 1), INITIAL_COLS, MAX_COLS),
+            MAX_COLS
+        );
+    }
+
+    #[test]
+    fn normalizes_empty_and_long_titles() {
+        assert_eq!(normalize_title(None, "/bin/zsh"), "zsh");
+        assert_eq!(normalize_title(Some("  "), "/bin/zsh"), "zsh");
+        assert_eq!(
+            normalize_title(Some(&"a".repeat(100)), "/bin/zsh").len(),
+            80
+        );
     }
 
     #[test]
