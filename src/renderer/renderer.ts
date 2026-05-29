@@ -87,6 +87,20 @@ const commandPanelWidthMin = 120;
 const commandPanelWidthMax = 360;
 const commandPanelKeyboardStep = 10;
 const historySearchResultLimit = 8;
+const fontFamilyOptions = [
+  { label: "Menlo", value: "Menlo, Monaco, Consolas, 'Courier New', monospace" },
+  { label: "Monaco", value: "Monaco, Menlo, Consolas, 'Courier New', monospace" },
+  { label: "SF Mono", value: "'SF Mono', Menlo, Monaco, Consolas, 'Courier New', monospace" },
+  { label: "JetBrains Mono", value: "'JetBrains Mono', Menlo, Monaco, Consolas, 'Courier New', monospace" },
+  { label: "Fira Code", value: "'Fira Code', Menlo, Monaco, Consolas, 'Courier New', monospace" },
+  { label: "Hack", value: "Hack, Menlo, Monaco, Consolas, 'Courier New', monospace" },
+  { label: "Cascadia Code", value: "'Cascadia Code', Menlo, Monaco, Consolas, 'Courier New', monospace" },
+  { label: "Consolas", value: "Consolas, Menlo, Monaco, 'Courier New', monospace" },
+  { label: "Courier New", value: "'Courier New', monospace" },
+  { label: "ui-monospace", value: "ui-monospace, Menlo, Monaco, Consolas, 'Courier New', monospace" },
+  { label: "monospace", value: "monospace" }
+] as const;
+const fontFamilyValues = new Set<string>(fontFamilyOptions.map((option) => option.value));
 
 const tabs = new Map<string, RendererTerminalTab>();
 const inputStates = new Map<string, TerminalInputState>();
@@ -969,7 +983,7 @@ function renderAppearanceEditor(): void {
   }
 
   appearanceEditorElement.replaceChildren(
-    createAppearanceTextRow("Font family", "fontFamily", draftSettings.appearance.fontFamily, "CSS font-family list"),
+    createAppearanceSelectRow("Font family", draftSettings.appearance.fontFamily, "Terminal font"),
     createAppearanceNumberRow("Font size", "fontSize", draftSettings.appearance.fontSize, 10, 28, 1, "10-28 px"),
     createAppearanceNumberRow(
       "Letter spacing",
@@ -1106,24 +1120,26 @@ function createFeatureRow(labelText: string, hintText: string, control: HTMLElem
   return row;
 }
 
-function createAppearanceTextRow(
-  labelText: string,
-  key: keyof Pick<AppearanceSettings, "fontFamily">,
-  value: string,
-  hintText: string
-): HTMLDivElement {
-  const input = createTextInput(value, labelText);
-  input.maxLength = 160;
-  input.addEventListener("input", () => {
+function createAppearanceSelectRow(labelText: string, value: string, hintText: string): HTMLDivElement {
+  const select = document.createElement("select");
+  select.className = "settings-select";
+  for (const optionValue of fontFamilyOptions) {
+    const option = document.createElement("option");
+    option.value = optionValue.value;
+    option.textContent = optionValue.label;
+    select.append(option);
+  }
+  select.value = fontFamilyValues.has(value) ? value : fontFamilyOptions[0].value;
+  select.addEventListener("change", () => {
     if (!draftSettings) {
       return;
     }
 
-    draftSettings.appearance[key] = input.value;
+    draftSettings.appearance.fontFamily = select.value;
     updateSaveState();
   });
 
-  return createAppearanceRow(labelText, hintText, input);
+  return createAppearanceRow(labelText, hintText, select);
 }
 
 function createAppearanceNumberRow(
@@ -1884,12 +1900,8 @@ function validateSettings(settings: AppSettings): ValidationResult {
     commandIds.add(command.id);
   }
 
-  if (settings.appearance.fontFamily.trim().length === 0) {
-    messages.push("Font family cannot be empty.");
-  }
-
-  if (settings.appearance.fontFamily.length > 160) {
-    messages.push("Font family must be 160 characters or fewer.");
+  if (!fontFamilyValues.has(settings.appearance.fontFamily)) {
+    messages.push("Font family must be selected from the list.");
   }
 
   if (!isInRange(settings.appearance.fontSize, 10, 28)) {

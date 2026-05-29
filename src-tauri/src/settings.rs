@@ -20,6 +20,19 @@ const DEFAULT_COMMAND_PANEL_WIDTH: u16 = 168;
 const MIN_COMMAND_PANEL_WIDTH: u16 = 120;
 const MAX_COMMAND_PANEL_WIDTH: u16 = 360;
 const DEFAULT_FONT_FAMILY: &str = "Menlo, Monaco, Consolas, 'Courier New', monospace";
+const FONT_FAMILY_OPTIONS: [&str; 11] = [
+    "Menlo, Monaco, Consolas, 'Courier New', monospace",
+    "Monaco, Menlo, Consolas, 'Courier New', monospace",
+    "'SF Mono', Menlo, Monaco, Consolas, 'Courier New', monospace",
+    "'JetBrains Mono', Menlo, Monaco, Consolas, 'Courier New', monospace",
+    "'Fira Code', Menlo, Monaco, Consolas, 'Courier New', monospace",
+    "Hack, Menlo, Monaco, Consolas, 'Courier New', monospace",
+    "'Cascadia Code', Menlo, Monaco, Consolas, 'Courier New', monospace",
+    "Consolas, Menlo, Monaco, 'Courier New', monospace",
+    "'Courier New', monospace",
+    "ui-monospace, Menlo, Monaco, Consolas, 'Courier New', monospace",
+    "monospace",
+];
 const DEFAULT_FONT_SIZE: u16 = 13;
 const MIN_FONT_SIZE: u16 = 10;
 const MAX_FONT_SIZE: u16 = 28;
@@ -316,8 +329,8 @@ fn normalize_appearance(value: Option<&Value>) -> AppearanceSettings {
         .and_then(|object| object.get("fontFamily"))
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.chars().take(160).collect())
+        .filter(|value| FONT_FAMILY_OPTIONS.contains(value))
+        .map(ToString::to_string)
         .unwrap_or_else(|| DEFAULT_FONT_FAMILY.to_string());
     let font_size = object
         .and_then(|object| object.get("fontSize"))
