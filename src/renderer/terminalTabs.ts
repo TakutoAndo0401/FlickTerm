@@ -12,6 +12,7 @@ export type RendererTerminalTab = {
 export function createTerminalView(tab: TerminalTab, appearance: AppearanceSettings): RendererTerminalTab {
   const terminal = new Terminal({
     cursorBlink: true,
+    cursorStyle: appearance.cursorStyle,
     fontFamily: appearance.fontFamily,
     fontSize: appearance.fontSize,
     letterSpacing: appearance.letterSpacing,

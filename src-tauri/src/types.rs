@@ -44,6 +44,13 @@ pub struct ShortcutBinding {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum AppLanguage {
+    En,
+    Ja,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LayoutSettings {
     pub command_panel_width: u16,
 }
@@ -55,6 +62,15 @@ pub struct AppearanceSettings {
     pub font_size: u16,
     pub letter_spacing: f64,
     pub line_height: f64,
+    pub cursor_style: CursorStyle,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CursorStyle {
+    Block,
+    Bar,
+    Underline,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -81,6 +97,7 @@ pub struct FeatureSettings {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    pub language: AppLanguage,
     pub commands: Vec<QuickCommand>,
     pub shortcuts: HashMap<String, ShortcutBinding>,
     pub layout: LayoutSettings,

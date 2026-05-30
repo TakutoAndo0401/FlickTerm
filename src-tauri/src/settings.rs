@@ -1,7 +1,7 @@
 use crate::types::{
-    AppSettings, AppSettingsSnapshot, AppearanceSettings, AutosuggestionSettings,
-    CommandHistorySettings, FeatureSettings, LayoutSettings, QuickCommand, QuickCommandRunMode,
-    ShortcutBinding, ShortcutRegistrationError, ShortcutScope,
+    AppLanguage, AppSettings, AppSettingsSnapshot, AppearanceSettings, AutosuggestionSettings,
+    CommandHistorySettings, CursorStyle, FeatureSettings, LayoutSettings, QuickCommand,
+    QuickCommandRunMode, ShortcutBinding, ShortcutRegistrationError, ShortcutScope,
 };
 use serde_json::Value;
 use std::{
@@ -20,18 +20,10 @@ const DEFAULT_COMMAND_PANEL_WIDTH: u16 = 168;
 const MIN_COMMAND_PANEL_WIDTH: u16 = 120;
 const MAX_COMMAND_PANEL_WIDTH: u16 = 360;
 const DEFAULT_FONT_FAMILY: &str = "Menlo, Monaco, Consolas, 'Courier New', monospace";
-const FONT_FAMILY_OPTIONS: [&str; 11] = [
+const FONT_FAMILY_OPTIONS: [&str; 3] = [
     "Menlo, Monaco, Consolas, 'Courier New', monospace",
     "Monaco, Menlo, Consolas, 'Courier New', monospace",
-    "'SF Mono', Menlo, Monaco, Consolas, 'Courier New', monospace",
-    "'JetBrains Mono', Menlo, Monaco, Consolas, 'Courier New', monospace",
-    "'Fira Code', Menlo, Monaco, Consolas, 'Courier New', monospace",
-    "Hack, Menlo, Monaco, Consolas, 'Courier New', monospace",
-    "'Cascadia Code', Menlo, Monaco, Consolas, 'Courier New', monospace",
-    "Consolas, Menlo, Monaco, 'Courier New', monospace",
     "'Courier New', monospace",
-    "ui-monospace, Menlo, Monaco, Consolas, 'Courier New', monospace",
-    "monospace",
 ];
 const DEFAULT_FONT_SIZE: u16 = 13;
 const MIN_FONT_SIZE: u16 = 10;
@@ -194,17 +186,26 @@ fn normalize_settings(value: Value) -> Result<AppSettings, SettingsError> {
         .map(|command| command.id.clone())
         .collect::<HashSet<_>>();
     let shortcuts = normalize_shortcuts(object.get("shortcuts"), &command_ids)?;
+    let language = normalize_language(object.get("language"));
     let layout = normalize_layout(object.get("layout"));
     let appearance = normalize_appearance(object.get("appearance"));
     let features = normalize_features(object.get("features"));
 
     Ok(AppSettings {
+        language,
         commands,
         shortcuts,
         layout,
         appearance,
         features,
     })
+}
+
+fn normalize_language(value: Option<&Value>) -> AppLanguage {
+    match value.and_then(Value::as_str) {
+        Some("ja") => AppLanguage::Ja,
+        _ => AppLanguage::En,
+    }
 }
 
 fn normalize_commands(value: Option<&Value>) -> Result<Vec<QuickCommand>, SettingsError> {
@@ -348,12 +349,21 @@ fn normalize_appearance(value: Option<&Value>) -> AppearanceSettings {
         .and_then(Value::as_f64)
         .unwrap_or(DEFAULT_LINE_HEIGHT)
         .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+    let cursor_style = match object
+        .and_then(|object| object.get("cursorStyle"))
+        .and_then(Value::as_str)
+    {
+        Some("bar") => CursorStyle::Bar,
+        Some("underline") => CursorStyle::Underline,
+        _ => CursorStyle::Block,
+    };
 
     AppearanceSettings {
         font_family,
         font_size,
         letter_spacing,
         line_height,
+        cursor_style,
     }
 }
 
@@ -435,6 +445,12 @@ fn default_settings() -> AppSettings {
         TOGGLE_SHORTCUT,
         ShortcutScope::Global,
     );
+    insert_shortcut(
+        &mut shortcuts,
+        "openSettings",
+        "CmdOrCtrl+,",
+        ShortcutScope::App,
+    );
     insert_shortcut(&mut shortcuts, "newTab", "CmdOrCtrl+T", ShortcutScope::App);
     insert_shortcut(
         &mut shortcuts,
@@ -464,6 +480,7 @@ fn default_settings() -> AppSettings {
     }
 
     AppSettings {
+        language: AppLanguage::En,
         commands,
         shortcuts,
         layout: LayoutSettings {
@@ -474,6 +491,7 @@ fn default_settings() -> AppSettings {
             font_size: DEFAULT_FONT_SIZE,
             letter_spacing: DEFAULT_LETTER_SPACING,
             line_height: DEFAULT_LINE_HEIGHT,
+            cursor_style: CursorStyle::Block,
         },
         features: FeatureSettings {
             command_history: CommandHistorySettings {

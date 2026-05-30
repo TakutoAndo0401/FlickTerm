@@ -21,6 +21,8 @@ export type ShortcutBinding = {
   scope: ShortcutScope;
 };
 
+export type AppLanguage = "en" | "ja";
+
 export type LayoutSettings = {
   commandPanelWidth: number;
 };
@@ -30,7 +32,10 @@ export type AppearanceSettings = {
   fontSize: number;
   letterSpacing: number;
   lineHeight: number;
+  cursorStyle: CursorStyle;
 };
+
+export type CursorStyle = "block" | "bar" | "underline";
 
 export type FeatureSettings = {
   commandHistory: {
@@ -44,6 +49,7 @@ export type FeatureSettings = {
 };
 
 export type AppSettings = {
+  language: AppLanguage;
   commands: QuickCommand[];
   shortcuts: Record<string, ShortcutBinding>;
   layout: LayoutSettings;

@@ -3,10 +3,12 @@ import "./styles.css";
 import "./tauriApi";
 import { createTerminalView, type RendererTerminalTab } from "./terminalTabs";
 import type {
+  AppLanguage,
   AppearanceSettings,
   AppSettings,
   AppSettingsSnapshot,
   CommandHistoryEntry,
+  CursorStyle,
   FeatureSettings,
   QuickCommand,
   QuickCommandRunMode,
@@ -19,6 +21,12 @@ type ShortcutAction = {
   id: string;
   label: string;
   hint?: string;
+  defaultScope: ShortcutScope;
+};
+
+type FixedShortcutAction = {
+  id: string;
+  labelKey: keyof SettingsCopy["shortcutActions"];
   defaultScope: ShortcutScope;
 };
 
@@ -69,15 +77,261 @@ const checkUpdatesButton = getElement("check-updates-button") as HTMLButtonEleme
 const cancelSettingsButton = getElement("cancel-settings-button") as HTMLButtonElement;
 const saveSettingsButton = getElement("save-settings-button") as HTMLButtonElement;
 
-const fixedShortcutActions: ShortcutAction[] = [
-  { id: "toggleVisibility", label: "Toggle Visibility", defaultScope: "global" },
-  { id: "newTab", label: "New Tab", defaultScope: "app" },
-  { id: "closeTab", label: "Close Tab", defaultScope: "app" },
-  { id: "nextTab", label: "Next Tab", defaultScope: "app" },
-  { id: "previousTab", label: "Previous Tab", defaultScope: "app" },
+const settingsCopy = {
+  en: {
+    title: "Settings",
+    close: "Close",
+    tabs: {
+      commands: "Commands",
+      shortcuts: "Shortcuts",
+      appearance: "Appearance",
+      features: "Features"
+    },
+    buttons: {
+      addCommand: "Add Command",
+      resetCommands: "Reset Commands",
+      resetShortcuts: "Reset Shortcuts",
+      resetAppearance: "Reset Appearance",
+      clearHistory: "Clear History",
+      resetFeatures: "Reset Features",
+      checkUpdates: "Check for Updates",
+      cancel: "Cancel",
+      save: "Save",
+      reset: "Reset",
+      delete: "Delete",
+      discard: "Discard",
+      clear: "Clear"
+    },
+    headers: {
+      label: "Label",
+      command: "Command",
+      mode: "Mode",
+      action: "Action",
+      scope: "Scope",
+      shortcut: "Shortcut"
+    },
+    placeholders: {
+      commandLabel: "Label",
+      command: "Command"
+    },
+    runModes: {
+      send: "Run",
+      insert: "Insert",
+      confirm: "Confirm"
+    },
+    shortcutActions: {
+      toggleVisibility: "Toggle Visibility",
+      openSettings: "Open Settings",
+      newTab: "New Tab",
+      closeTab: "Close Tab",
+      nextTab: "Next Tab",
+      previousTab: "Previous Tab"
+    },
+    appearance: {
+      language: "Language",
+      languageHint: "Settings screen language",
+      fontFamily: "Font family",
+      fontFamilyHint: "Terminal font",
+      fontSize: "Font size",
+      fontSizeHint: "10-28 px",
+      letterSpacing: "Letter spacing",
+      letterSpacingHint: "-1 to 4 px",
+      lineHeight: "Line height",
+      lineHeightHint: "1.0-1.8",
+      cursorStyle: "Cursor style",
+      cursorStyleHint: "Terminal cursor shape"
+    },
+    features: {
+      commandHistory: "Command History",
+      commandHistoryHint: "Save executed commands for suggestions and search",
+      maxHistory: "Max History",
+      maxHistoryHint: "Number of unique command and directory pairs to keep",
+      autosuggestions: "Autosuggestions",
+      autosuggestionsHint: "Show the best matching command as ghost text",
+      acceptWithTab: "Accept With Tab",
+      acceptWithTabHint: "Use Tab for autosuggestions instead of passing it to the shell",
+      enabled: "Enabled",
+      disabled: "Disabled"
+    },
+    status: {
+      commandHistoryCleared: "Command history cleared.",
+      checkingUpdates: "Checking for updates...",
+      upToDate: "FlickTerm is up to date.",
+      settingsInvalid: "Settings are invalid."
+    },
+    errors: {
+      resetCommands: "Failed to reset commands.",
+      resetShortcuts: "Failed to reset shortcuts.",
+      resetAppearance: "Failed to reset appearance.",
+      resetFeatures: "Failed to reset features.",
+      clearHistory: "Failed to clear command history.",
+      checkUpdates: "Failed to check for updates.",
+      saveSettings: "Failed to save settings.",
+      deleteCommand: "Failed to delete command.",
+      shortcutRequiresModifier: "Shortcut must include Cmd/Ctrl or Alt.",
+      emptyCommandLabel: "Command labels cannot be empty.",
+      fontFamily: "Font family must be selected from the list.",
+      fontSize: "Font size must be between 10 and 28.",
+      letterSpacing: "Letter spacing must be between -1 and 4.",
+      lineHeight: "Line height must be between 1.0 and 1.8.",
+      cursorStyle: "Cursor style must be selected from the list.",
+      maxHistoryInteger: "Max history must be a whole number.",
+      maxHistoryRange: "Max history must be between 100 and 50000.",
+      language: "Language must be selected from the list."
+    },
+    confirmations: {
+      resetCommands: "Reset commands to defaults?",
+      resetShortcuts: "Reset shortcuts to defaults?",
+      resetAppearance: "Reset appearance to defaults?",
+      resetFeatures: "Reset feature settings to defaults?",
+      clearHistory: "Clear all command history?",
+      discardUnsaved: "Discard unsaved settings changes?"
+    },
+    selectTab: (index: number) => `Select Tab ${index}`,
+    deleteCommand: (label: string) => `Delete "${label}"?`,
+    commandCannotBeEmpty: (label: string) => `Command "${label || "Untitled"}" cannot be empty.`,
+    duplicateCommandId: (id: string) => `Duplicate command id: ${id}.`,
+    assignedShortcut: (accelerator: string, action: string) => `${accelerator} is already assigned to ${action}.`,
+    runCommandAction: (label: string) => `Run Command: ${label}`,
+    installingUpdate: (version: string | null | undefined) => `Installing ${version ?? "the latest version"} and restarting...`
+  },
+  ja: {
+    title: "設定",
+    close: "閉じる",
+    tabs: {
+      commands: "コマンド",
+      shortcuts: "ショートカット",
+      appearance: "表示",
+      features: "機能"
+    },
+    buttons: {
+      addCommand: "コマンドを追加",
+      resetCommands: "コマンドをリセット",
+      resetShortcuts: "ショートカットをリセット",
+      resetAppearance: "表示設定をリセット",
+      clearHistory: "履歴を削除",
+      resetFeatures: "機能設定をリセット",
+      checkUpdates: "アップデートを確認",
+      cancel: "キャンセル",
+      save: "保存",
+      reset: "リセット",
+      delete: "削除",
+      discard: "破棄",
+      clear: "クリア"
+    },
+    headers: {
+      label: "ラベル",
+      command: "コマンド",
+      mode: "モード",
+      action: "アクション",
+      scope: "範囲",
+      shortcut: "ショートカット"
+    },
+    placeholders: {
+      commandLabel: "ラベル",
+      command: "コマンド"
+    },
+    runModes: {
+      send: "実行",
+      insert: "入力",
+      confirm: "確認"
+    },
+    shortcutActions: {
+      toggleVisibility: "表示を切り替え",
+      openSettings: "設定を開く",
+      newTab: "新しいタブ",
+      closeTab: "タブを閉じる",
+      nextTab: "次のタブ",
+      previousTab: "前のタブ"
+    },
+    appearance: {
+      language: "言語",
+      languageHint: "設定画面の表示言語",
+      fontFamily: "フォント",
+      fontFamilyHint: "ターミナルのフォント",
+      fontSize: "フォントサイズ",
+      fontSizeHint: "10-28 px",
+      letterSpacing: "文字間隔",
+      letterSpacingHint: "-1 から 4 px",
+      lineHeight: "行の高さ",
+      lineHeightHint: "1.0-1.8",
+      cursorStyle: "カーソル形状",
+      cursorStyleHint: "ターミナルのカーソル形状"
+    },
+    features: {
+      commandHistory: "コマンド履歴",
+      commandHistoryHint: "候補表示と検索のために実行済みコマンドを保存",
+      maxHistory: "最大履歴数",
+      maxHistoryHint: "保存するコマンドとディレクトリの組み合わせ数",
+      autosuggestions: "自動候補",
+      autosuggestionsHint: "最も一致するコマンドを薄い文字で表示",
+      acceptWithTab: "Tab で候補を採用",
+      acceptWithTabHint: "Tab をシェルへ渡さず自動候補の採用に使う",
+      enabled: "有効",
+      disabled: "無効"
+    },
+    status: {
+      commandHistoryCleared: "コマンド履歴を削除しました。",
+      checkingUpdates: "アップデートを確認しています...",
+      upToDate: "FlickTerm は最新です。",
+      settingsInvalid: "設定が正しくありません。"
+    },
+    errors: {
+      resetCommands: "コマンドをリセットできませんでした。",
+      resetShortcuts: "ショートカットをリセットできませんでした。",
+      resetAppearance: "表示設定をリセットできませんでした。",
+      resetFeatures: "機能設定をリセットできませんでした。",
+      clearHistory: "コマンド履歴を削除できませんでした。",
+      checkUpdates: "アップデートを確認できませんでした。",
+      saveSettings: "設定を保存できませんでした。",
+      deleteCommand: "コマンドを削除できませんでした。",
+      shortcutRequiresModifier: "ショートカットには Cmd/Ctrl または Alt が必要です。",
+      emptyCommandLabel: "コマンドのラベルは空にできません。",
+      fontFamily: "フォントは一覧から選択してください。",
+      fontSize: "フォントサイズは 10 から 28 の間にしてください。",
+      letterSpacing: "文字間隔は -1 から 4 の間にしてください。",
+      lineHeight: "行の高さは 1.0 から 1.8 の間にしてください。",
+      cursorStyle: "カーソル形状は一覧から選択してください。",
+      maxHistoryInteger: "最大履歴数は整数にしてください。",
+      maxHistoryRange: "最大履歴数は 100 から 50000 の間にしてください。",
+      language: "言語は一覧から選択してください。"
+    },
+    confirmations: {
+      resetCommands: "コマンドを初期設定に戻しますか？",
+      resetShortcuts: "ショートカットを初期設定に戻しますか？",
+      resetAppearance: "表示設定を初期設定に戻しますか？",
+      resetFeatures: "機能設定を初期設定に戻しますか？",
+      clearHistory: "すべてのコマンド履歴を削除しますか？",
+      discardUnsaved: "未保存の設定変更を破棄しますか？"
+    },
+    selectTab: (index: number) => `タブ ${index} を選択`,
+    deleteCommand: (label: string) => `「${label}」を削除しますか？`,
+    commandCannotBeEmpty: (label: string) => `コマンド「${label || "無題"}」は空にできません。`,
+    duplicateCommandId: (id: string) => `コマンド ID が重複しています: ${id}`,
+    assignedShortcut: (accelerator: string, action: string) => `${accelerator} はすでに ${action} に割り当てられています。`,
+    runCommandAction: (label: string) => `コマンドを実行: ${label}`,
+    installingUpdate: (version: string | null | undefined) => `${version ?? "最新バージョン"} をインストールして再起動しています...`
+  }
+} as const;
+
+type SettingsCopy = (typeof settingsCopy)[AppLanguage];
+
+const languageOptions = [
+  { label: "English", value: "en" },
+  { label: "日本語", value: "ja" }
+] as const;
+const languageValues = new Set<AppLanguage>(languageOptions.map((option) => option.value));
+
+const fixedShortcutActions: FixedShortcutAction[] = [
+  { id: "toggleVisibility", labelKey: "toggleVisibility", defaultScope: "global" },
+  { id: "openSettings", labelKey: "openSettings", defaultScope: "app" },
+  { id: "newTab", labelKey: "newTab", defaultScope: "app" },
+  { id: "closeTab", labelKey: "closeTab", defaultScope: "app" },
+  { id: "nextTab", labelKey: "nextTab", defaultScope: "app" },
+  { id: "previousTab", labelKey: "previousTab", defaultScope: "app" },
   ...Array.from({ length: 9 }, (_, index) => ({
     id: `selectTab:${index + 1}`,
-    label: `Select Tab ${index + 1}`,
+    labelKey: "newTab" as const,
     defaultScope: "app" as const
   }))
 ];
@@ -90,17 +344,15 @@ const historySearchResultLimit = 8;
 const fontFamilyOptions = [
   { label: "Menlo", value: "Menlo, Monaco, Consolas, 'Courier New', monospace" },
   { label: "Monaco", value: "Monaco, Menlo, Consolas, 'Courier New', monospace" },
-  { label: "SF Mono", value: "'SF Mono', Menlo, Monaco, Consolas, 'Courier New', monospace" },
-  { label: "JetBrains Mono", value: "'JetBrains Mono', Menlo, Monaco, Consolas, 'Courier New', monospace" },
-  { label: "Fira Code", value: "'Fira Code', Menlo, Monaco, Consolas, 'Courier New', monospace" },
-  { label: "Hack", value: "Hack, Menlo, Monaco, Consolas, 'Courier New', monospace" },
-  { label: "Cascadia Code", value: "'Cascadia Code', Menlo, Monaco, Consolas, 'Courier New', monospace" },
-  { label: "Consolas", value: "Consolas, Menlo, Monaco, 'Courier New', monospace" },
-  { label: "Courier New", value: "'Courier New', monospace" },
-  { label: "ui-monospace", value: "ui-monospace, Menlo, Monaco, Consolas, 'Courier New', monospace" },
-  { label: "monospace", value: "monospace" }
+  { label: "Courier New", value: "'Courier New', monospace" }
 ] as const;
 const fontFamilyValues = new Set<string>(fontFamilyOptions.map((option) => option.value));
+const cursorStyleOptions = [
+  { label: "Block", value: "block" },
+  { label: "Bar", value: "bar" },
+  { label: "Underline", value: "underline" }
+] as const;
+const cursorStyleValues = new Set<string>(cursorStyleOptions.map((option) => option.value));
 
 const tabs = new Map<string, RendererTerminalTab>();
 const inputStates = new Map<string, TerminalInputState>();
@@ -126,6 +378,7 @@ let activeHistorySearch:
   | {
       tabId: string;
       query: string;
+      interactionMode: "keyboard" | "mouse";
       selectedIndex: number;
       results: CommandHistoryEntry[];
     }
@@ -307,7 +560,7 @@ addCommandButton.addEventListener("click", () => {
 
   draftSettings.commands.push({
     id: `cmd_${crypto.randomUUID()}`,
-    label: "New command",
+    label: settingsLanguage() === "ja" ? "新しいコマンド" : "New command",
     command: "",
     runMode: "send"
   });
@@ -319,7 +572,7 @@ resetCommandsButton.addEventListener("click", () => {
     return;
   }
 
-  confirmSettingsAction("Reset commands to defaults?", "Reset")
+  confirmSettingsAction(copy().confirmations.resetCommands, copy().buttons.reset)
     .then((confirmed) => {
       if (!confirmed || !draftSettings || !settingsSnapshot) {
         return;
@@ -339,7 +592,7 @@ resetCommandsButton.addEventListener("click", () => {
       renderSettingsModal();
     })
     .catch((error) => {
-      showSettingsStatus(error instanceof Error ? error.message : "Failed to reset commands.", true);
+      showSettingsStatus(error instanceof Error ? error.message : copy().errors.resetCommands, true);
     });
 });
 
@@ -348,7 +601,7 @@ resetShortcutsButton.addEventListener("click", () => {
     return;
   }
 
-  confirmSettingsAction("Reset shortcuts to defaults?", "Reset")
+  confirmSettingsAction(copy().confirmations.resetShortcuts, copy().buttons.reset)
     .then((confirmed) => {
       if (!confirmed || !draftSettings || !settingsSnapshot) {
         return;
@@ -358,7 +611,7 @@ resetShortcutsButton.addEventListener("click", () => {
       renderSettingsModal();
     })
     .catch((error) => {
-      showSettingsStatus(error instanceof Error ? error.message : "Failed to reset shortcuts.", true);
+      showSettingsStatus(error instanceof Error ? error.message : copy().errors.resetShortcuts, true);
     });
 });
 
@@ -367,7 +620,7 @@ resetAppearanceButton.addEventListener("click", () => {
     return;
   }
 
-  confirmSettingsAction("Reset appearance to defaults?", "Reset")
+  confirmSettingsAction(copy().confirmations.resetAppearance, copy().buttons.reset)
     .then((confirmed) => {
       if (!confirmed || !draftSettings || !settingsSnapshot) {
         return;
@@ -377,7 +630,7 @@ resetAppearanceButton.addEventListener("click", () => {
       renderSettingsModal();
     })
     .catch((error) => {
-      showSettingsStatus(error instanceof Error ? error.message : "Failed to reset appearance.", true);
+      showSettingsStatus(error instanceof Error ? error.message : copy().errors.resetAppearance, true);
     });
 });
 
@@ -386,7 +639,7 @@ resetFeaturesButton.addEventListener("click", () => {
     return;
   }
 
-  confirmSettingsAction("Reset feature settings to defaults?", "Reset")
+  confirmSettingsAction(copy().confirmations.resetFeatures, copy().buttons.reset)
     .then((confirmed) => {
       if (!confirmed || !draftSettings || !settingsSnapshot) {
         return;
@@ -396,12 +649,12 @@ resetFeaturesButton.addEventListener("click", () => {
       renderSettingsModal();
     })
     .catch((error) => {
-      showSettingsStatus(error instanceof Error ? error.message : "Failed to reset features.", true);
+      showSettingsStatus(error instanceof Error ? error.message : copy().errors.resetFeatures, true);
     });
 });
 
 clearHistoryButton.addEventListener("click", () => {
-  confirmSettingsAction("Clear all command history?", "Delete")
+  confirmSettingsAction(copy().confirmations.clearHistory, copy().buttons.delete)
     .then((confirmed) => {
       if (!confirmed) {
         return;
@@ -410,17 +663,17 @@ clearHistoryButton.addEventListener("click", () => {
       return window.terminalApi.clearCommandHistory().then((entries) => {
         commandHistory = entries;
         updateActiveSuggestion();
-        showSettingsStatus("Command history cleared.");
+        showSettingsStatus(copy().status.commandHistoryCleared);
       });
     })
     .catch((error) => {
-      showSettingsStatus(error instanceof Error ? error.message : "Failed to clear command history.", true);
+      showSettingsStatus(error instanceof Error ? error.message : copy().errors.clearHistory, true);
     });
 });
 
 checkUpdatesButton.addEventListener("click", () => {
   checkForUpdates().catch((error) => {
-    showSettingsStatus(error instanceof Error ? error.message : "Failed to check for updates.", true);
+    showSettingsStatus(error instanceof Error ? error.message : copy().errors.checkUpdates, true);
   });
 });
 
@@ -432,7 +685,7 @@ cancelSettingsButton.addEventListener("click", () => {
 
 saveSettingsButton.addEventListener("click", () => {
   saveSettings().catch((error) => {
-    showSettingsStatus(error instanceof Error ? error.message : "Failed to save settings.", true);
+    showSettingsStatus(error instanceof Error ? error.message : copy().errors.saveSettings, true);
   });
 });
 
@@ -719,6 +972,11 @@ function runShortcutAction(actionId: string): void {
     return;
   }
 
+  if (actionId === "openSettings") {
+    openSettings();
+    return;
+  }
+
   if (actionId === "closeTab") {
     closeActiveTab();
     return;
@@ -788,7 +1046,7 @@ async function closeSettingsWithConfirmation(): Promise<void> {
     return;
   }
 
-  if (hasUnsavedChanges() && !(await confirmSettingsAction("Discard unsaved settings changes?", "Discard"))) {
+  if (hasUnsavedChanges() && !(await confirmSettingsAction(copy().confirmations.discardUnsaved, copy().buttons.discard))) {
     return;
   }
 
@@ -808,10 +1066,20 @@ function isSettingsOpen(): boolean {
   return settingsOverlay.classList.contains("is-open");
 }
 
+function settingsLanguage(): AppLanguage {
+  return draftSettings?.language ?? appSettings?.language ?? "en";
+}
+
+function copy(): SettingsCopy {
+  return settingsCopy[settingsLanguage()];
+}
+
 function renderSettingsModal(): void {
   if (!draftSettings) {
     return;
   }
+
+  renderSettingsCopy();
 
   for (const tabButton of settingsTabs) {
     tabButton.classList.toggle("is-active", tabButton.dataset.settingsTab === settingsTab);
@@ -828,25 +1096,62 @@ function renderSettingsModal(): void {
   updateSaveState();
 }
 
+function renderSettingsCopy(): void {
+  const text = copy();
+  const title = document.getElementById("settings-title");
+  if (title) {
+    title.textContent = text.title;
+  }
+  settingsCloseButton.title = text.close;
+
+  for (const tabButton of settingsTabs) {
+    const tab = tabButton.dataset.settingsTab;
+    if (tab === "commands" || tab === "shortcuts" || tab === "appearance" || tab === "features") {
+      tabButton.textContent = text.tabs[tab];
+    }
+  }
+
+  addCommandButton.textContent = text.buttons.addCommand;
+  resetCommandsButton.textContent = text.buttons.resetCommands;
+  resetShortcutsButton.textContent = text.buttons.resetShortcuts;
+  resetAppearanceButton.textContent = text.buttons.resetAppearance;
+  clearHistoryButton.textContent = text.buttons.clearHistory;
+  resetFeaturesButton.textContent = text.buttons.resetFeatures;
+  checkUpdatesButton.textContent = text.buttons.checkUpdates;
+  cancelSettingsButton.textContent = text.buttons.cancel;
+  saveSettingsButton.textContent = text.buttons.save;
+
+  const commandHeader = Array.from(settingsCommandsPanel.querySelectorAll(".command-editor-header span"));
+  commandHeader[0]?.replaceChildren(text.headers.label);
+  commandHeader[1]?.replaceChildren(text.headers.command);
+  commandHeader[2]?.replaceChildren(text.headers.mode);
+
+  const shortcutHeader = Array.from(settingsShortcutsPanel.querySelectorAll(".shortcut-editor-header span"));
+  shortcutHeader[0]?.replaceChildren(text.headers.action);
+  shortcutHeader[1]?.replaceChildren(text.headers.scope);
+  shortcutHeader[2]?.replaceChildren(text.headers.shortcut);
+}
+
 function renderCommandEditor(): void {
   if (!draftSettings) {
     return;
   }
 
+  const text = copy();
   commandsEditorElement.replaceChildren();
 
   for (const command of draftSettings.commands) {
     const row = document.createElement("div");
     row.className = "command-editor-row";
 
-    const labelInput = createTextInput(command.label, "Label");
+    const labelInput = createTextInput(command.label, text.placeholders.commandLabel);
     labelInput.addEventListener("input", () => {
       command.label = labelInput.value;
       renderShortcutEditor();
       updateSaveState();
     });
 
-    const commandInput = createTextInput(command.command, "Command");
+    const commandInput = createTextInput(command.command, text.placeholders.command);
     commandInput.addEventListener("input", () => {
       command.command = commandInput.value;
       updateSaveState();
@@ -855,9 +1160,9 @@ function renderCommandEditor(): void {
     const runModeSelect = document.createElement("select");
     runModeSelect.className = "settings-select";
     for (const [value, label] of [
-      ["send", "Run"],
-      ["insert", "Insert"],
-      ["confirm", "Confirm"]
+      ["send", text.runModes.send],
+      ["insert", text.runModes.insert],
+      ["confirm", text.runModes.confirm]
     ] satisfies Array<[QuickCommandRunMode, string]>) {
       const option = document.createElement("option");
       option.value = value;
@@ -873,13 +1178,13 @@ function renderCommandEditor(): void {
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "settings-danger-button";
-    deleteButton.textContent = "Delete";
+    deleteButton.textContent = text.buttons.delete;
     deleteButton.addEventListener("click", () => {
       if (!draftSettings) {
         return;
       }
 
-      confirmSettingsAction(`Delete "${command.label}"?`, "Delete")
+      confirmSettingsAction(copy().deleteCommand(command.label), copy().buttons.delete)
         .then((confirmed) => {
           if (!confirmed || !draftSettings) {
             return;
@@ -890,7 +1195,7 @@ function renderCommandEditor(): void {
           renderSettingsModal();
         })
         .catch((error) => {
-          showSettingsStatus(error instanceof Error ? error.message : "Failed to delete command.", true);
+          showSettingsStatus(error instanceof Error ? error.message : copy().errors.deleteCommand, true);
         });
     });
 
@@ -904,6 +1209,7 @@ function renderShortcutEditor(): void {
     return;
   }
 
+  const text = copy();
   shortcutsEditorElement.replaceChildren();
 
   for (const action of getShortcutActions(draftSettings)) {
@@ -946,10 +1252,14 @@ function renderShortcutEditor(): void {
     recordButton.dataset.actionId = action.id;
     recordButton.textContent =
       recordingActionId === action.id
-        ? "Press keys..."
+        ? settingsLanguage() === "ja"
+          ? "キーを押してください..."
+          : "Press keys..."
         : binding.accelerator
           ? displayAccelerator(binding.accelerator)
-          : "Unassigned";
+          : settingsLanguage() === "ja"
+            ? "未割り当て"
+            : "Unassigned";
     recordButton.addEventListener("click", () => {
       recordingActionId = action.id;
       renderShortcutEditor();
@@ -958,7 +1268,7 @@ function renderShortcutEditor(): void {
     const clearButton = document.createElement("button");
     clearButton.type = "button";
     clearButton.className = "settings-secondary-button";
-    clearButton.textContent = "Clear";
+    clearButton.textContent = text.buttons.clear;
     clearButton.addEventListener("click", () => {
       if (!draftSettings) {
         return;
@@ -982,19 +1292,42 @@ function renderAppearanceEditor(): void {
     return;
   }
 
+  const text = copy();
   appearanceEditorElement.replaceChildren(
-    createAppearanceSelectRow("Font family", draftSettings.appearance.fontFamily, "Terminal font"),
-    createAppearanceNumberRow("Font size", "fontSize", draftSettings.appearance.fontSize, 10, 28, 1, "10-28 px"),
+    createLanguageSelectRow(text.appearance.language, draftSettings.language, text.appearance.languageHint),
+    createAppearanceSelectRow(text.appearance.fontFamily, draftSettings.appearance.fontFamily, text.appearance.fontFamilyHint),
     createAppearanceNumberRow(
-      "Letter spacing",
+      text.appearance.fontSize,
+      "fontSize",
+      draftSettings.appearance.fontSize,
+      10,
+      28,
+      1,
+      text.appearance.fontSizeHint
+    ),
+    createAppearanceNumberRow(
+      text.appearance.letterSpacing,
       "letterSpacing",
       draftSettings.appearance.letterSpacing,
       -1,
       4,
       0.1,
-      "-1 to 4 px"
+      text.appearance.letterSpacingHint
     ),
-    createAppearanceNumberRow("Line height", "lineHeight", draftSettings.appearance.lineHeight, 1, 1.8, 0.05, "1.0-1.8")
+    createAppearanceNumberRow(
+      text.appearance.lineHeight,
+      "lineHeight",
+      draftSettings.appearance.lineHeight,
+      1,
+      1.8,
+      0.05,
+      text.appearance.lineHeightHint
+    ),
+    createAppearanceCursorStyleRow(
+      text.appearance.cursorStyle,
+      draftSettings.appearance.cursorStyle,
+      text.appearance.cursorStyleHint
+    )
   );
 }
 
@@ -1003,10 +1336,11 @@ function renderFeaturesEditor(): void {
     return;
   }
 
+  const text = copy();
   featuresEditorElement.replaceChildren(
     createFeatureCheckboxRow(
-      "Command History",
-      "Save executed commands for suggestions and search",
+      text.features.commandHistory,
+      text.features.commandHistoryHint,
       draftSettings.features.commandHistory.enabled,
       (checked) => {
         if (!draftSettings) {
@@ -1016,16 +1350,16 @@ function renderFeaturesEditor(): void {
       }
     ),
     createFeatureNumberRow(
-      "Max History",
-      "Number of unique command and directory pairs to keep",
+      text.features.maxHistory,
+      text.features.maxHistoryHint,
       draftSettings.features.commandHistory.maxEntries,
       100,
       50000,
       100
     ),
     createFeatureCheckboxRow(
-      "Autosuggestions",
-      "Show the best matching command as ghost text",
+      text.features.autosuggestions,
+      text.features.autosuggestionsHint,
       draftSettings.features.autosuggestions.enabled,
       (checked) => {
         if (!draftSettings) {
@@ -1035,8 +1369,8 @@ function renderFeaturesEditor(): void {
       }
     ),
     createFeatureCheckboxRow(
-      "Accept With Tab",
-      "Use Tab for autosuggestions instead of passing it to the shell",
+      text.features.acceptWithTab,
+      text.features.acceptWithTabHint,
       draftSettings.features.autosuggestions.acceptWithTab,
       (checked) => {
         if (!draftSettings) {
@@ -1064,9 +1398,9 @@ function createFeatureCheckboxRow(
     updateSaveState();
   });
   const text = document.createElement("span");
-  text.textContent = checked ? "Enabled" : "Disabled";
+  text.textContent = checked ? copy().features.enabled : copy().features.disabled;
   input.addEventListener("change", () => {
-    text.textContent = input.checked ? "Enabled" : "Disabled";
+    text.textContent = input.checked ? copy().features.enabled : copy().features.disabled;
   });
   label.append(input, text);
 
@@ -1120,6 +1454,28 @@ function createFeatureRow(labelText: string, hintText: string, control: HTMLElem
   return row;
 }
 
+function createLanguageSelectRow(labelText: string, value: AppLanguage, hintText: string): HTMLDivElement {
+  const select = document.createElement("select");
+  select.className = "settings-select";
+  for (const optionValue of languageOptions) {
+    const option = document.createElement("option");
+    option.value = optionValue.value;
+    option.textContent = optionValue.label;
+    select.append(option);
+  }
+  select.value = languageValues.has(value) ? value : "en";
+  select.addEventListener("change", () => {
+    if (!draftSettings) {
+      return;
+    }
+
+    draftSettings.language = languageValues.has(select.value as AppLanguage) ? (select.value as AppLanguage) : "en";
+    renderSettingsModal();
+  });
+
+  return createAppearanceRow(labelText, hintText, select);
+}
+
 function createAppearanceSelectRow(labelText: string, value: string, hintText: string): HTMLDivElement {
   const select = document.createElement("select");
   select.className = "settings-select";
@@ -1136,6 +1492,28 @@ function createAppearanceSelectRow(labelText: string, value: string, hintText: s
     }
 
     draftSettings.appearance.fontFamily = select.value;
+    updateSaveState();
+  });
+
+  return createAppearanceRow(labelText, hintText, select);
+}
+
+function createAppearanceCursorStyleRow(labelText: string, value: CursorStyle, hintText: string): HTMLDivElement {
+  const select = document.createElement("select");
+  select.className = "settings-select";
+  for (const optionValue of cursorStyleOptions) {
+    const option = document.createElement("option");
+    option.value = optionValue.value;
+    option.textContent = optionValue.label;
+    select.append(option);
+  }
+  select.value = cursorStyleValues.has(value) ? value : cursorStyleOptions[0].value;
+  select.addEventListener("change", () => {
+    if (!draftSettings) {
+      return;
+    }
+
+    draftSettings.appearance.cursorStyle = select.value as CursorStyle;
     updateSaveState();
   });
 
@@ -1214,6 +1592,7 @@ function createTerminalInputState(view: RendererTerminalTab): TerminalInputState
     }
 
     activeHistorySearch.query = historyInput.value;
+    activeHistorySearch.interactionMode = "keyboard";
     activeHistorySearch.selectedIndex = 0;
     activeHistorySearch.results = getHistorySearchResults(historyInput.value);
     renderHistorySearch();
@@ -1516,6 +1895,7 @@ function openHistorySearch(tabId: string): void {
   activeHistorySearch = {
     tabId,
     query: state.line,
+    interactionMode: "keyboard",
     selectedIndex: 0,
     results: getHistorySearchResults(state.line)
   };
@@ -1557,18 +1937,13 @@ function handleHistorySearchKeydown(event: KeyboardEvent): void {
 
   if (event.key === "ArrowDown") {
     event.preventDefault();
-    activeHistorySearch.selectedIndex = Math.min(
-      activeHistorySearch.results.length - 1,
-      activeHistorySearch.selectedIndex + 1
-    );
-    renderHistorySearch();
+    selectHistorySearchResult(activeHistorySearch.selectedIndex + 1, "keyboard");
     return;
   }
 
   if (event.key === "ArrowUp") {
     event.preventDefault();
-    activeHistorySearch.selectedIndex = Math.max(0, activeHistorySearch.selectedIndex - 1);
-    renderHistorySearch();
+    selectHistorySearchResult(activeHistorySearch.selectedIndex - 1, "keyboard");
     return;
   }
 
@@ -1636,11 +2011,13 @@ function renderHistorySearch(): void {
     button.className = "history-search-result";
     button.classList.toggle("is-selected", index === activeHistorySearch.selectedIndex);
     button.addEventListener("mouseenter", () => {
-      if (!activeHistorySearch) {
+      if (!activeHistorySearch || activeHistorySearch.interactionMode !== "mouse") {
         return;
       }
-      activeHistorySearch.selectedIndex = index;
-      renderHistorySearch();
+      selectHistorySearchResult(index, "mouse");
+    });
+    button.addEventListener("mousemove", () => {
+      selectHistorySearchResult(index, "mouse");
     });
     button.addEventListener("click", () => {
       replaceCurrentLine(activeHistorySearch?.tabId ?? "", entry.command, false);
@@ -1662,6 +2039,28 @@ function renderHistorySearch(): void {
     button.append(content, count);
     state.historyResults.append(button);
   }
+}
+
+function selectHistorySearchResult(index: number, interactionMode: "keyboard" | "mouse"): void {
+  if (!activeHistorySearch) {
+    return;
+  }
+
+  const selectedIndex =
+    activeHistorySearch.results.length === 0
+      ? 0
+      : Math.max(0, Math.min(activeHistorySearch.results.length - 1, index));
+
+  if (
+    activeHistorySearch.selectedIndex === selectedIndex &&
+    activeHistorySearch.interactionMode === interactionMode
+  ) {
+    return;
+  }
+
+  activeHistorySearch.interactionMode = interactionMode;
+  activeHistorySearch.selectedIndex = selectedIndex;
+  renderHistorySearch();
 }
 
 function replaceCurrentLine(tabId: string, command: string, run: boolean): void {
@@ -1813,7 +2212,7 @@ function handleShortcutRecording(event: KeyboardEvent): void {
 
   const accelerator = eventToAccelerator(event);
   if (!accelerator) {
-    showSettingsStatus("Shortcut must include Cmd/Ctrl or Alt.", true);
+    showSettingsStatus(copy().errors.shortcutRequiresModifier, true);
     return;
   }
 
@@ -1866,16 +2265,16 @@ async function saveSettings(): Promise<void> {
 
 async function checkForUpdates(): Promise<void> {
   checkUpdatesButton.disabled = true;
-  showSettingsStatus("Checking for updates...");
+  showSettingsStatus(copy().status.checkingUpdates);
 
   try {
     const result = await window.terminalApi.installUpdateIfAvailable();
     if (!result.available) {
-      showSettingsStatus("FlickTerm is up to date.");
+      showSettingsStatus(copy().status.upToDate);
       return;
     }
 
-    showSettingsStatus(`Installing ${result.version ?? "the latest version"} and restarting...`);
+    showSettingsStatus(copy().installingUpdate(result.version));
   } finally {
     checkUpdatesButton.disabled = false;
   }
@@ -1887,39 +2286,47 @@ function validateSettings(settings: AppSettings): ValidationResult {
 
   for (const command of settings.commands) {
     if (command.label.trim().length === 0) {
-      messages.push("Command labels cannot be empty.");
+      messages.push(copy().errors.emptyCommandLabel);
     }
 
     if (command.command.trim().length === 0) {
-      messages.push(`Command "${command.label || "Untitled"}" cannot be empty.`);
+      messages.push(copy().commandCannotBeEmpty(command.label));
     }
 
     if (commandIds.has(command.id)) {
-      messages.push(`Duplicate command id: ${command.id}.`);
+      messages.push(copy().duplicateCommandId(command.id));
     }
     commandIds.add(command.id);
   }
 
+  if (!languageValues.has(settings.language)) {
+    messages.push(copy().errors.language);
+  }
+
   if (!fontFamilyValues.has(settings.appearance.fontFamily)) {
-    messages.push("Font family must be selected from the list.");
+    messages.push(copy().errors.fontFamily);
   }
 
   if (!isInRange(settings.appearance.fontSize, 10, 28)) {
-    messages.push("Font size must be between 10 and 28.");
+    messages.push(copy().errors.fontSize);
   }
 
   if (!isInRange(settings.appearance.letterSpacing, -1, 4)) {
-    messages.push("Letter spacing must be between -1 and 4.");
+    messages.push(copy().errors.letterSpacing);
   }
 
   if (!isInRange(settings.appearance.lineHeight, 1, 1.8)) {
-    messages.push("Line height must be between 1.0 and 1.8.");
+    messages.push(copy().errors.lineHeight);
+  }
+
+  if (!cursorStyleValues.has(settings.appearance.cursorStyle)) {
+    messages.push(copy().errors.cursorStyle);
   }
 
   if (!Number.isInteger(settings.features.commandHistory.maxEntries)) {
-    messages.push("Max history must be a whole number.");
+    messages.push(copy().errors.maxHistoryInteger);
   } else if (!isInRange(settings.features.commandHistory.maxEntries, 100, 50000)) {
-    messages.push("Max history must be between 100 and 50000.");
+    messages.push(copy().errors.maxHistoryRange);
   }
 
   const actions = getShortcutActions(settings);
@@ -1934,9 +2341,7 @@ function validateSettings(settings: AppSettings): ValidationResult {
 
     const existing = assigned.get(binding.accelerator);
     if (existing) {
-      messages.push(
-        `${displayAccelerator(binding.accelerator)} is already assigned to ${actionLabels.get(existing) ?? existing}.`
-      );
+      messages.push(copy().assignedShortcut(displayAccelerator(binding.accelerator), actionLabels.get(existing) ?? existing));
       continue;
     }
 
@@ -1959,7 +2364,7 @@ function updateSaveState(): void {
   saveSettingsButton.disabled = isSavingSettings || !validation.valid;
 
   if (!validation.valid) {
-    showSettingsStatus(validation.messages[0] ?? "Settings are invalid.", true);
+    showSettingsStatus(validation.messages[0] ?? copy().status.settingsInvalid, true);
   } else if (settingsStatusElement.classList.contains("is-error")) {
     showSettingsStatus("", false);
   }
@@ -1967,10 +2372,17 @@ function updateSaveState(): void {
 
 function getShortcutActions(settings: AppSettings): ShortcutAction[] {
   return [
-    ...fixedShortcutActions,
+    ...fixedShortcutActions.map((action) => {
+      const selectTabMatch = action.id.match(/^selectTab:(\d)$/);
+      return {
+        id: action.id,
+        label: selectTabMatch ? copy().selectTab(Number(selectTabMatch[1])) : copy().shortcutActions[action.labelKey],
+        defaultScope: action.defaultScope
+      };
+    }),
     ...settings.commands.map((command) => ({
       id: `runCommand:${command.id}`,
-      label: `Run Command: ${command.label}`,
+      label: copy().runCommandAction(command.label),
       hint: command.command,
       defaultScope: "app" as const
     }))
@@ -2200,11 +2612,14 @@ function confirmSettingsAction(message: string, confirmLabel: string): Promise<b
   const cancelButton = document.createElement("button");
   cancelButton.type = "button";
   cancelButton.className = "settings-secondary-button";
-  cancelButton.textContent = "Cancel";
+  cancelButton.textContent = copy().buttons.cancel;
 
   const confirmButton = document.createElement("button");
   confirmButton.type = "button";
-  confirmButton.className = confirmLabel === "Delete" ? "settings-danger-button" : "settings-primary-button";
+  confirmButton.className =
+    confirmLabel === settingsCopy.en.buttons.delete || confirmLabel === settingsCopy.ja.buttons.delete
+      ? "settings-danger-button"
+      : "settings-primary-button";
   confirmButton.textContent = confirmLabel;
 
   actions.append(cancelButton, confirmButton);
@@ -2250,6 +2665,7 @@ function hasUnsavedChanges(): boolean {
 
 function cloneSettings(settings: AppSettings): AppSettings {
   return {
+    language: settings.language,
     commands: settings.commands.map((command) => ({ ...command })),
     shortcuts: Object.fromEntries(
       Object.entries(settings.shortcuts).map(([actionId, binding]) => [actionId, { ...binding }])
@@ -2289,7 +2705,8 @@ function getActiveAppearance(): AppearanceSettings {
       fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace",
       fontSize: 13,
       letterSpacing: 0,
-      lineHeight: 1.2
+      lineHeight: 1.2,
+      cursorStyle: "block"
     }
   );
 }
@@ -2300,6 +2717,7 @@ function applyAppearanceToTerminalViews(appearance: AppearanceSettings): void {
     view.terminal.options.fontSize = appearance.fontSize;
     view.terminal.options.letterSpacing = appearance.letterSpacing;
     view.terminal.options.lineHeight = appearance.lineHeight;
+    view.terminal.options.cursorStyle = appearance.cursorStyle;
   }
 
   scheduleFitActiveTerminal();
