@@ -146,6 +146,15 @@ const settingsCopy = {
       commandHistoryHint: "Save executed commands for suggestions and search",
       maxHistory: "Max History",
       maxHistoryHint: "Number of unique command and directory pairs to keep",
+      shellIntegration: "Shell integration",
+      shellIntegrationHint: "Use zsh preexec to save the exact command that the shell executes",
+      shellIntegrationSetupTitle: "Shell integration setup",
+      shellIntegrationSetupHint:
+        "Add this to ~/.zshrc, then open a new FlickTerm tab. If it is already added, existing tabs still need to be reopened.",
+      shellIntegrationCopy: "Copy",
+      shellIntegrationInstall: "Add to ~/.zshrc",
+      shellIntegrationDetected: "Detected in this tab",
+      shellIntegrationNotDetected: "Not detected in this tab yet",
       autosuggestions: "Autosuggestions",
       autosuggestionsHint: "Show the best matching command as ghost text",
       acceptWithTab: "Accept With Tab",
@@ -155,6 +164,8 @@ const settingsCopy = {
     },
     status: {
       commandHistoryCleared: "Command history cleared.",
+      shellIntegrationCopied: "Shell integration snippet copied.",
+      shellIntegrationInstalled: (path: string) => `Shell integration snippet is installed in ${path}.`,
       checkingUpdates: "Checking for updates...",
       upToDate: "FlickTerm is up to date.",
       settingsInvalid: "Settings are invalid."
@@ -165,6 +176,8 @@ const settingsCopy = {
       resetAppearance: "Failed to reset appearance.",
       resetFeatures: "Failed to reset features.",
       clearHistory: "Failed to clear command history.",
+      copyShellIntegration: "Failed to copy shell integration snippet.",
+      installShellIntegration: "Failed to update ~/.zshrc.",
       checkUpdates: "Failed to check for updates.",
       saveSettings: "Failed to save settings.",
       deleteCommand: "Failed to delete command.",
@@ -263,6 +276,15 @@ const settingsCopy = {
       commandHistoryHint: "候補表示と検索のために実行済みコマンドを保存",
       maxHistory: "最大履歴数",
       maxHistoryHint: "保存するコマンドとディレクトリの組み合わせ数",
+      shellIntegration: "シェル連携",
+      shellIntegrationHint: "zsh の preexec で、シェルが実行する確定済みコマンドを保存",
+      shellIntegrationSetupTitle: "シェル連携の設定",
+      shellIntegrationSetupHint:
+        "この内容を ~/.zshrc に追加してから、新しい FlickTerm タブを開いてください。既に追加済みの場合も、現在開いているタブには反映されません。",
+      shellIntegrationCopy: "コピー",
+      shellIntegrationInstall: "~/.zshrc に追加",
+      shellIntegrationDetected: "このタブで検出済み",
+      shellIntegrationNotDetected: "このタブでは未検出",
       autosuggestions: "自動候補",
       autosuggestionsHint: "最も一致するコマンドを薄い文字で表示",
       acceptWithTab: "Tab で候補を採用",
@@ -272,6 +294,8 @@ const settingsCopy = {
     },
     status: {
       commandHistoryCleared: "コマンド履歴を削除しました。",
+      shellIntegrationCopied: "シェル連携の snippet をコピーしました。",
+      shellIntegrationInstalled: (path: string) => `シェル連携の snippet を ${path} に追加しました。`,
       checkingUpdates: "アップデートを確認しています...",
       upToDate: "FlickTerm は最新です。",
       settingsInvalid: "設定が正しくありません。"
@@ -282,6 +306,8 @@ const settingsCopy = {
       resetAppearance: "表示設定をリセットできませんでした。",
       resetFeatures: "機能設定をリセットできませんでした。",
       clearHistory: "コマンド履歴を削除できませんでした。",
+      copyShellIntegration: "シェル連携の snippet をコピーできませんでした。",
+      installShellIntegration: "~/.zshrc を更新できませんでした。",
       checkUpdates: "アップデートを確認できませんでした。",
       saveSettings: "設定を保存できませんでした。",
       deleteCommand: "コマンドを削除できませんでした。",
@@ -374,6 +400,8 @@ let settingsTab: "commands" | "shortcuts" | "appearance" | "features" = "command
 let recordingActionId: string | null = null;
 let isSavingSettings = false;
 let commandHistory: CommandHistoryEntry[] = [];
+let shellIntegrationSnippet = "";
+const shellIntegrationDetectedTabs = new Set<string>();
 let activeHistorySearch:
   | {
       tabId: string;
@@ -400,6 +428,22 @@ window.terminalApi.onTerminalData(({ id, data }) => {
   tabs.get(id)?.terminal.write(new Uint8Array(data), () => {
     scheduleSuggestionUpdate(id);
   });
+});
+
+window.terminalApi.onCommandHistoryUpdated((entries) => {
+  commandHistory = entries;
+  updateActiveSuggestion();
+});
+
+window.terminalApi.onShellIntegrationStatus(({ id, detected }) => {
+  if (detected) {
+    shellIntegrationDetectedTabs.add(id);
+  } else {
+    shellIntegrationDetectedTabs.delete(id);
+  }
+  if (settingsTab === "features" && isSettingsOpen()) {
+    renderFeaturesEditor();
+  }
 });
 
 window.terminalApi.onTerminalExit(({ id, exitCode }) => {
@@ -700,6 +744,7 @@ init().catch((error) => {
 
 async function init(): Promise<void> {
   await reloadSettings();
+  shellIntegrationSnippet = await window.terminalApi.getShellIntegrationZshrcSnippet();
   commandHistory = await window.terminalApi.listCommandHistory();
   renderQuickCommands();
   await createTab();
@@ -791,6 +836,7 @@ function closeTab(id: string): void {
   view.element.remove();
   tabs.delete(id);
   inputStates.delete(id);
+  shellIntegrationDetectedTabs.delete(id);
 
   if (activeTabId === id) {
     const nextId = tabs.keys().next().value as string | undefined;
@@ -1337,6 +1383,8 @@ function renderFeaturesEditor(): void {
   }
 
   const text = copy();
+  const shellIntegrationEnabled =
+    draftSettings.features.commandHistory.enabled && draftSettings.features.commandHistory.shellIntegration;
   featuresEditorElement.replaceChildren(
     createFeatureCheckboxRow(
       text.features.commandHistory,
@@ -1347,6 +1395,7 @@ function renderFeaturesEditor(): void {
           return;
         }
         draftSettings.features.commandHistory.enabled = checked;
+        renderFeaturesEditor();
       }
     ),
     createFeatureNumberRow(
@@ -1357,6 +1406,19 @@ function renderFeaturesEditor(): void {
       50000,
       100
     ),
+    createFeatureCheckboxRow(
+      text.features.shellIntegration,
+      text.features.shellIntegrationHint,
+      draftSettings.features.commandHistory.shellIntegration,
+      (checked) => {
+        if (!draftSettings) {
+          return;
+        }
+        draftSettings.features.commandHistory.shellIntegration = checked;
+        renderFeaturesEditor();
+      }
+    ),
+    ...(shellIntegrationEnabled ? [createShellIntegrationSetup()] : []),
     createFeatureCheckboxRow(
       text.features.autosuggestions,
       text.features.autosuggestionsHint,
@@ -1405,6 +1467,70 @@ function createFeatureCheckboxRow(
   label.append(input, text);
 
   return createFeatureRow(labelText, hintText, label);
+}
+
+function createShellIntegrationSetup(): HTMLDivElement {
+  const text = copy();
+  const row = document.createElement("div");
+  row.className = "shell-integration-setup";
+
+  const header = document.createElement("div");
+  header.className = "shell-integration-header";
+
+  const title = document.createElement("div");
+  title.className = "shell-integration-title";
+  title.textContent = text.features.shellIntegrationSetupTitle;
+
+  const detected = document.createElement("div");
+  const isDetected = activeTabId ? shellIntegrationDetectedTabs.has(activeTabId) : false;
+  detected.className = `shell-integration-status ${isDetected ? "is-detected" : ""}`;
+  detected.textContent = isDetected ? text.features.shellIntegrationDetected : text.features.shellIntegrationNotDetected;
+  header.append(title, detected);
+
+  const hint = document.createElement("div");
+  hint.className = "shell-integration-hint";
+  hint.textContent = text.features.shellIntegrationSetupHint;
+
+  const snippet = document.createElement("pre");
+  snippet.className = "shell-integration-snippet";
+  snippet.textContent = shellIntegrationSnippet;
+
+  const actions = document.createElement("div");
+  actions.className = "shell-integration-actions";
+
+  const copyButton = document.createElement("button");
+  copyButton.type = "button";
+  copyButton.className = "settings-secondary-button";
+  copyButton.textContent = text.features.shellIntegrationCopy;
+  copyButton.addEventListener("click", () => {
+    navigator.clipboard
+      .writeText(shellIntegrationSnippet)
+      .then(() => {
+        showSettingsStatus(copy().status.shellIntegrationCopied);
+      })
+      .catch((error) => {
+        showSettingsStatus(error instanceof Error ? error.message : copy().errors.copyShellIntegration, true);
+      });
+  });
+
+  const installButton = document.createElement("button");
+  installButton.type = "button";
+  installButton.className = "settings-primary-button";
+  installButton.textContent = text.features.shellIntegrationInstall;
+  installButton.addEventListener("click", () => {
+    window.terminalApi
+      .installShellIntegrationZshrc()
+      .then((path) => {
+        showSettingsStatus(copy().status.shellIntegrationInstalled(path));
+      })
+      .catch((error) => {
+        showSettingsStatus(error instanceof Error ? error.message : copy().errors.installShellIntegration, true);
+      });
+  });
+
+  actions.append(copyButton, installButton);
+  row.append(header, hint, snippet, actions);
+  return row;
 }
 
 function createFeatureNumberRow(
@@ -1749,6 +1875,9 @@ function handleTerminalInputData(tabId: string, data: string): boolean {
 
 async function recordCommandIfEligible(tabId: string, rawCommand: string): Promise<void> {
   if (!appSettings?.features.commandHistory.enabled) {
+    return;
+  }
+  if (appSettings.features.commandHistory.shellIntegration) {
     return;
   }
 

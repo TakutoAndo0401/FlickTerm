@@ -41,6 +41,7 @@ export type FeatureSettings = {
   commandHistory: {
     enabled: boolean;
     maxEntries: number;
+    shellIntegration: boolean;
   };
   autosuggestions: {
     enabled: boolean;
@@ -123,6 +124,11 @@ export type CommandHistoryRecordRequest = {
   maxEntries: number;
 };
 
+export type ShellIntegrationStatusEvent = {
+  id: string;
+  detected: boolean;
+};
+
 export type UpdateInstallResult = {
   available: boolean;
   version?: string;
@@ -135,6 +141,8 @@ export type TerminalApi = {
   listCommandHistory: () => Promise<CommandHistoryEntry[]>;
   recordCommandHistory: (request: CommandHistoryRecordRequest) => Promise<CommandHistoryEntry[]>;
   clearCommandHistory: () => Promise<CommandHistoryEntry[]>;
+  getShellIntegrationZshrcSnippet: () => Promise<string>;
+  installShellIntegrationZshrc: () => Promise<string>;
   installUpdateIfAvailable: () => Promise<UpdateInstallResult>;
   createTerminal: (request: CreateTerminalRequest) => Promise<CreateTerminalResponse>;
   writeTerminal: (request: TerminalWriteRequest) => void;
@@ -144,6 +152,8 @@ export type TerminalApi = {
   onShortcutTriggered: (callback: (actionId: string) => void) => () => void;
   onTerminalData: (callback: (event: TerminalDataEvent) => void) => () => void;
   onTerminalExit: (callback: (event: TerminalExitEvent) => void) => () => void;
+  onCommandHistoryUpdated: (callback: (entries: CommandHistoryEntry[]) => void) => () => void;
+  onShellIntegrationStatus: (callback: (event: ShellIntegrationStatusEvent) => void) => () => void;
 };
 
 declare global {

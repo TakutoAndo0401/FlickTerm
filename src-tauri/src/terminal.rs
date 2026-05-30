@@ -1,6 +1,11 @@
 use crate::{
+    command_history::CommandHistoryStore,
+    settings::SettingsStore,
     settings::default_shell,
-    types::{CreateTerminalRequest, TerminalDataEvent, TerminalExitEvent, TerminalTab},
+    types::{
+        CommandHistoryRecordRequest, CreateTerminalRequest, ShellIntegrationStatusEvent,
+        TerminalDataEvent, TerminalExitEvent, TerminalTab,
+    },
 };
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::{
@@ -21,6 +26,11 @@ const MAX_COLS: u16 = 500;
 const MAX_ROWS: u16 = 200;
 const MAX_TERMINAL_ID_LEN: usize = 80;
 const MAX_TERMINAL_WRITE_BYTES: usize = 1024 * 1024;
+const MAX_OSC_BUFFER_BYTES: usize = 64 * 1024;
+const MAX_SHELL_COMMAND_BYTES: usize = 8192;
+const MAX_SHELL_CWD_BYTES: usize = 4096;
+const FLICKTERM_OSC_PREFIX: &[u8] = b"7777;FlickTermExecutedCommand;";
+const FLICKTERM_READY_OSC_PREFIX: &[u8] = b"7777;FlickTermShellIntegrationReady;";
 
 #[derive(Debug, Error)]
 pub enum PtyError {
@@ -61,6 +71,8 @@ impl PtyManager {
         &self,
         request: CreateTerminalRequest,
         app: AppHandle,
+        settings: Arc<SettingsStore>,
+        command_history: Arc<CommandHistoryStore>,
     ) -> Result<TerminalTab, PtyError> {
         validate_terminal_id(&request.id)?;
 
@@ -136,7 +148,13 @@ impl PtyManager {
             .map_err(|_| PtyError::Lock)?
             .insert(request.id.clone(), session);
 
-        self.spawn_reader(request.id.clone(), app.clone(), reader);
+        self.spawn_reader(
+            request.id.clone(),
+            app.clone(),
+            reader,
+            settings,
+            command_history,
+        );
         self.spawn_waiter(request.id, app, child);
 
         Ok(tab)
@@ -216,20 +234,43 @@ impl PtyManager {
         }
     }
 
-    fn spawn_reader(&self, id: String, app: AppHandle, mut reader: Box<dyn Read + Send>) {
+    fn spawn_reader(
+        &self,
+        id: String,
+        app: AppHandle,
+        mut reader: Box<dyn Read + Send>,
+        settings: Arc<SettingsStore>,
+        command_history: Arc<CommandHistoryStore>,
+    ) {
         thread::spawn(move || {
             let mut buffer = [0_u8; 8192];
+            let mut output_parser = TerminalOutputParser::default();
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(size) => {
-                        let _ = app.emit(
-                            "terminal:data",
-                            TerminalDataEvent {
-                                id: id.clone(),
-                                data: buffer[..size].to_vec(),
-                            },
-                        );
+                        let parsed = output_parser.push(&buffer[..size]);
+                        if parsed.shell_integration_detected {
+                            let _ = app.emit(
+                                "shell-integration:status",
+                                ShellIntegrationStatusEvent {
+                                    id: id.clone(),
+                                    detected: true,
+                                },
+                            );
+                        }
+                        for command in parsed.commands {
+                            record_shell_command(&id, &app, &settings, &command_history, command);
+                        }
+                        if !parsed.data.is_empty() {
+                            let _ = app.emit(
+                                "terminal:data",
+                                TerminalDataEvent {
+                                    id: id.clone(),
+                                    data: parsed.data,
+                                },
+                            );
+                        }
                     }
                     Err(_) => break,
                 }
@@ -272,6 +313,232 @@ impl PtyManager {
                 },
             );
         });
+    }
+}
+
+#[derive(Default)]
+struct TerminalOutputParser {
+    pending: Vec<u8>,
+}
+
+struct ParsedTerminalOutput {
+    data: Vec<u8>,
+    commands: Vec<ShellExecutedCommand>,
+    shell_integration_detected: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ShellExecutedCommand {
+    command: String,
+    cwd: Option<String>,
+}
+
+impl TerminalOutputParser {
+    fn push(&mut self, data: &[u8]) -> ParsedTerminalOutput {
+        self.pending.extend_from_slice(data);
+
+        let mut visible = Vec::new();
+        let mut commands = Vec::new();
+        let mut shell_integration_detected = false;
+        let mut index = 0;
+
+        while index < self.pending.len() {
+            let Some(start_offset) = find_bytes(&self.pending[index..], b"\x1b]") else {
+                visible.extend_from_slice(&self.pending[index..]);
+                self.pending.clear();
+                return ParsedTerminalOutput {
+                    data: visible,
+                    commands,
+                    shell_integration_detected,
+                };
+            };
+            let start = index + start_offset;
+            visible.extend_from_slice(&self.pending[index..start]);
+
+            let content_start = start + 2;
+            let Some((terminator_start, terminator_len)) =
+                find_osc_terminator(&self.pending[content_start..])
+            else {
+                if start > 0 {
+                    self.pending.drain(..start);
+                }
+                if self.pending.len() > MAX_OSC_BUFFER_BYTES {
+                    if !self.pending.starts_with(b"\x1b]7777;") {
+                        visible.extend_from_slice(&self.pending);
+                    }
+                    self.pending.clear();
+                }
+                return ParsedTerminalOutput {
+                    data: visible,
+                    commands,
+                    shell_integration_detected,
+                };
+            };
+
+            let content_end = content_start + terminator_start;
+            let sequence_end = content_end + terminator_len;
+            let content = &self.pending[content_start..content_end];
+            if content.starts_with(FLICKTERM_OSC_PREFIX) {
+                if let Some(command) = parse_flickterm_command(content) {
+                    commands.push(command);
+                }
+            } else if content.starts_with(FLICKTERM_READY_OSC_PREFIX) {
+                shell_integration_detected = true;
+            } else {
+                visible.extend_from_slice(&self.pending[start..sequence_end]);
+            }
+
+            index = sequence_end;
+        }
+
+        self.pending.clear();
+        ParsedTerminalOutput {
+            data: visible,
+            commands,
+            shell_integration_detected,
+        }
+    }
+}
+
+fn record_shell_command(
+    id: &str,
+    app: &AppHandle,
+    settings: &SettingsStore,
+    command_history: &CommandHistoryStore,
+    command: ShellExecutedCommand,
+) {
+    let settings = match settings.get_settings() {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("Failed to read settings for shell integration: {error}");
+            return;
+        }
+    };
+
+    if !settings.features.command_history.enabled
+        || !settings.features.command_history.shell_integration
+    {
+        return;
+    }
+
+    let command_text = command.command.trim_end().to_string();
+    if command_text.trim().is_empty()
+        || command_text.starts_with(' ')
+        || command_text.len() > MAX_SHELL_COMMAND_BYTES
+        || has_unsupported_control(&command_text)
+    {
+        return;
+    }
+
+    let cwd = command.cwd.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty()
+            || trimmed.len() > MAX_SHELL_CWD_BYTES
+            || has_unsupported_control(trimmed)
+        {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+
+    let result = command_history.record(CommandHistoryRecordRequest {
+        command: command_text,
+        cwd,
+        max_entries: settings.features.command_history.max_entries,
+    });
+
+    match result {
+        Ok(entries) => {
+            let _ = app.emit("command-history:updated", entries);
+            let _ = app.emit(
+                "shell-integration:status",
+                ShellIntegrationStatusEvent {
+                    id: id.to_string(),
+                    detected: true,
+                },
+            );
+        }
+        Err(error) => {
+            eprintln!("Failed to record shell integration command history: {error}");
+        }
+    }
+}
+
+fn parse_flickterm_command(content: &[u8]) -> Option<ShellExecutedCommand> {
+    let payload = content.strip_prefix(FLICKTERM_OSC_PREFIX)?;
+    let payload = std::str::from_utf8(payload).ok()?;
+    let mut command = None;
+    let mut cwd = None;
+
+    for part in payload.split(';') {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        match key {
+            "command" => command = percent_decode(value),
+            "cwd" => cwd = percent_decode(value),
+            _ => {}
+        }
+    }
+
+    command.map(|command| ShellExecutedCommand { command, cwd })
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return None;
+            }
+            let high = hex_value(bytes[index + 1])?;
+            let low = hex_value(bytes[index + 2])?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn has_unsupported_control(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| character.is_control() && character != '\t')
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn find_osc_terminator(data: &[u8]) -> Option<(usize, usize)> {
+    let bel = data.iter().position(|byte| *byte == b'\x07');
+    let st = find_bytes(data, b"\x1b\\");
+
+    match (bel, st) {
+        (Some(bel), Some(st)) if bel < st => Some((bel, 1)),
+        (Some(_), Some(st)) => Some((st, 2)),
+        (Some(bel), None) => Some((bel, 1)),
+        (None, Some(st)) => Some((st, 2)),
+        (None, None) => None,
     }
 }
 
@@ -430,5 +697,68 @@ mod tests {
             append_missing_path_entries("/usr/bin:/opt/homebrew/bin", &supplemental_entries),
             "/usr/bin:/opt/homebrew/bin:/Users/example/.local/bin"
         );
+    }
+
+    #[test]
+    fn extracts_flickterm_command_osc_and_keeps_visible_output() {
+        let mut parser = TerminalOutputParser::default();
+        let output = parser.push(
+            b"before\x1b]7777;FlickTermExecutedCommand;command=git%20status;cwd=/tmp\x07after",
+        );
+
+        assert_eq!(output.data, b"beforeafter");
+        assert_eq!(
+            output.commands,
+            vec![ShellExecutedCommand {
+                command: "git status".to_string(),
+                cwd: Some("/tmp".to_string())
+            }]
+        );
+    }
+
+    #[test]
+    fn passes_non_flickterm_osc_through() {
+        let mut parser = TerminalOutputParser::default();
+        let output = parser.push(b"\x1b]0;title\x07prompt");
+
+        assert_eq!(output.data, b"\x1b]0;title\x07prompt");
+        assert!(output.commands.is_empty());
+    }
+
+    #[test]
+    fn supports_split_flickterm_osc() {
+        let mut parser = TerminalOutputParser::default();
+        let first = parser.push(b"before\x1b]7777;FlickTermExecutedCommand;command=git");
+        let second = parser.push(b"%20status;cwd=/tmp\x07after");
+
+        assert_eq!(first.data, b"before");
+        assert!(first.commands.is_empty());
+        assert_eq!(second.data, b"after");
+        assert_eq!(
+            second.commands,
+            vec![ShellExecutedCommand {
+                command: "git status".to_string(),
+                cwd: Some("/tmp".to_string())
+            }]
+        );
+    }
+
+    #[test]
+    fn drops_malformed_flickterm_osc() {
+        let mut parser = TerminalOutputParser::default();
+        let output = parser.push(b"a\x1b]7777;FlickTermExecutedCommand;command=%QQ\x07b");
+
+        assert_eq!(output.data, b"ab");
+        assert!(output.commands.is_empty());
+    }
+
+    #[test]
+    fn detects_shell_integration_ready_osc() {
+        let mut parser = TerminalOutputParser::default();
+        let output = parser.push(b"\x1b]7777;FlickTermShellIntegrationReady;cwd=/tmp\x07prompt");
+
+        assert_eq!(output.data, b"prompt");
+        assert!(output.commands.is_empty());
+        assert!(output.shell_integration_detected);
     }
 }

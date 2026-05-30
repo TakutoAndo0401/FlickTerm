@@ -78,6 +78,7 @@ pub enum CursorStyle {
 pub struct CommandHistorySettings {
     pub enabled: bool,
     pub max_entries: usize,
+    pub shell_integration: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -191,4 +192,11 @@ pub struct CommandHistoryRecordRequest {
     pub command: String,
     pub cwd: Option<String>,
     pub max_entries: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellIntegrationStatusEvent {
+    pub id: String,
+    pub detected: bool,
 }

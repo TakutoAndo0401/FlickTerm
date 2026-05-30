@@ -12,6 +12,7 @@ import type {
   CreateTerminalResponse,
   QuickCommand,
   ShortcutRegistrationError,
+  ShellIntegrationStatusEvent,
   TerminalApi,
   TerminalDataEvent,
   TerminalExitEvent,
@@ -45,6 +46,10 @@ const terminalApi: TerminalApi = {
     invoke<CommandHistoryEntry[]>("command_history_record", { request }),
 
   clearCommandHistory: () => invoke<CommandHistoryEntry[]>("command_history_clear"),
+
+  getShellIntegrationZshrcSnippet: () => invoke<string>("shell_integration_zshrc_snippet"),
+
+  installShellIntegrationZshrc: () => invoke<string>("shell_integration_install_zshrc"),
 
   installUpdateIfAvailable: async () => {
     const update = await check();
@@ -110,6 +115,30 @@ const terminalApi: TerminalApi = {
   onTerminalExit: (callback: (event: TerminalExitEvent) => void) => {
     let cleanup = () => {};
     listen<TerminalExitEvent>("terminal:exit", (event) => {
+      callback(event.payload);
+    }).then((unlisten) => {
+      cleanup = unlisten;
+    });
+    return () => {
+      cleanup();
+    };
+  },
+
+  onCommandHistoryUpdated: (callback: (entries: CommandHistoryEntry[]) => void) => {
+    let cleanup = () => {};
+    listen<CommandHistoryEntry[]>("command-history:updated", (event) => {
+      callback(event.payload);
+    }).then((unlisten) => {
+      cleanup = unlisten;
+    });
+    return () => {
+      cleanup();
+    };
+  },
+
+  onShellIntegrationStatus: (callback: (event: ShellIntegrationStatusEvent) => void) => {
+    let cleanup = () => {};
+    listen<ShellIntegrationStatusEvent>("shell-integration:status", (event) => {
       callback(event.payload);
     }).then((unlisten) => {
       cleanup = unlisten;

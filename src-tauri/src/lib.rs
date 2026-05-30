@@ -1,10 +1,12 @@
 mod command_history;
 mod settings;
+mod shell_integration;
 mod terminal;
 mod types;
 
 use command_history::CommandHistoryStore;
 use settings::SettingsStore;
+use std::sync::Arc;
 use tauri::{Manager, State};
 use terminal::PtyManager;
 use types::{
@@ -14,8 +16,8 @@ use types::{
 };
 
 struct AppState {
-    settings: SettingsStore,
-    command_history: CommandHistoryStore,
+    settings: Arc<SettingsStore>,
+    command_history: Arc<CommandHistoryStore>,
     pty: PtyManager,
 }
 
@@ -76,6 +78,18 @@ fn command_history_clear(state: State<'_, AppState>) -> Result<Vec<CommandHistor
 }
 
 #[tauri::command]
+fn shell_integration_zshrc_snippet(app: tauri::AppHandle) -> Result<String, String> {
+    shell_integration::zshrc_snippet(&app).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn shell_integration_install_zshrc(app: tauri::AppHandle) -> Result<String, String> {
+    shell_integration::install_zshrc_snippet(&app)
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn terminal_create(
     request: CreateTerminalRequest,
     app: tauri::AppHandle,
@@ -83,7 +97,12 @@ fn terminal_create(
 ) -> Result<CreateTerminalResponse, String> {
     state
         .pty
-        .create(request, app)
+        .create(
+            request,
+            app,
+            Arc::clone(&state.settings),
+            Arc::clone(&state.command_history),
+        )
         .map(|tab| CreateTerminalResponse { tab })
         .map_err(|error| error.to_string())
 }
@@ -137,9 +156,10 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let settings = SettingsStore::new(app.handle().clone())?;
+            shell_integration::ensure_shell_integration_files(app.handle())?;
+            let settings = Arc::new(SettingsStore::new(app.handle().clone())?);
             settings.load()?;
-            let command_history = CommandHistoryStore::new(app.handle().clone())?;
+            let command_history = Arc::new(CommandHistoryStore::new(app.handle().clone())?);
             command_history.load()?;
 
             app.manage(AppState {
@@ -157,6 +177,8 @@ pub fn run() {
             command_history_list,
             command_history_record,
             command_history_clear,
+            shell_integration_zshrc_snippet,
+            shell_integration_install_zshrc,
             terminal_create,
             terminal_write,
             terminal_resize,

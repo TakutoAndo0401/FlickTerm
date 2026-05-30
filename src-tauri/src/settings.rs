@@ -393,6 +393,10 @@ fn normalize_features(value: Option<&Value>) -> FeatureSettings {
                 .and_then(Value::as_bool)
                 .unwrap_or(true),
             max_entries,
+            shell_integration: command_history
+                .and_then(|object| object.get("shellIntegration"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         },
         autosuggestions: AutosuggestionSettings {
             enabled: autosuggestions
@@ -497,6 +501,7 @@ fn default_settings() -> AppSettings {
             command_history: CommandHistorySettings {
                 enabled: true,
                 max_entries: DEFAULT_COMMAND_HISTORY_MAX_ENTRIES,
+                shell_integration: false,
             },
             autosuggestions: AutosuggestionSettings {
                 enabled: true,

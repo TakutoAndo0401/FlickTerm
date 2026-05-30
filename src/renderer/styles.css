@@ -549,6 +549,60 @@ button {
   min-height: 38px;
 }
 
+.shell-integration-setup {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #2b3139;
+  border-radius: 6px;
+  background: #111315;
+}
+
+.shell-integration-header,
+.shell-integration-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.shell-integration-title {
+  color: #e3e7ec;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.shell-integration-status {
+  flex: 0 0 auto;
+  color: #d69a4b;
+  font-size: 11px;
+}
+
+.shell-integration-status.is-detected {
+  color: #5fb878;
+}
+
+.shell-integration-hint {
+  color: #98a2ad;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.shell-integration-snippet {
+  overflow: auto;
+  max-height: 180px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #252b33;
+  border-radius: 6px;
+  color: #d6d8dc;
+  background: #0b0d0f;
+  font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .appearance-editor-label,
 .features-editor-label {
   color: #d6d8dc;
