@@ -266,9 +266,9 @@ button {
 
 .terminal-pane {
   position: absolute;
-  inset: 0;
+  inset: 10px 10px 20px;
   display: none;
-  padding: 10px 10px 20px;
+  overflow: hidden;
 }
 
 .terminal-pane.is-active {

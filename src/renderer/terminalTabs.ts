@@ -1,4 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Terminal } from "@xterm/xterm";
 import type { AppearanceSettings, TerminalTab } from "../shared/terminalTypes";
 
@@ -28,6 +30,7 @@ export function createTerminalView(tab: TerminalTab, appearance: AppearanceSetti
 
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
+  terminal.loadAddon(new WebLinksAddon(handleWebLink));
 
   const element = document.createElement("div");
   element.className = "terminal-pane";
@@ -39,4 +42,62 @@ export function createTerminalView(tab: TerminalTab, appearance: AppearanceSetti
     fitAddon,
     element
   };
+}
+
+function handleWebLink(event: MouseEvent, uri: string): void {
+  if (!event.metaKey) {
+    return;
+  }
+
+  const url = normalizeHttpUrl(uri);
+  if (!url) {
+    return;
+  }
+
+  event.preventDefault();
+  void openUrl(url).catch((error) => {
+    console.warn("Failed to open terminal link", { url, error });
+  });
+}
+
+function normalizeHttpUrl(uri: string): string | null {
+  const trimmed = trimTrailingUrlPunctuation(uri.trim());
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function trimTrailingUrlPunctuation(uri: string): string {
+  let next = uri;
+  while (/[.,;:!?]+$/.test(next)) {
+    next = next.slice(0, -1);
+  }
+
+  while (next.endsWith(")") && countChar(next, "(") < countChar(next, ")")) {
+    next = next.slice(0, -1);
+  }
+  while (next.endsWith("]") && countChar(next, "[") < countChar(next, "]")) {
+    next = next.slice(0, -1);
+  }
+  while (next.endsWith("}") && countChar(next, "{") < countChar(next, "}")) {
+    next = next.slice(0, -1);
+  }
+
+  return next;
+}
+
+function countChar(value: string, char: string): number {
+  let count = 0;
+  for (const current of value) {
+    if (current === char) {
+      count += 1;
+    }
+  }
+  return count;
 }
