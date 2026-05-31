@@ -18,6 +18,7 @@ import type {
   TerminalExitEvent,
   TerminalKillRequest,
   TerminalResizeRequest,
+  TerminalSessionsSnapshot,
   TerminalWriteRequest,
   UpdateInstallResult
 } from "../shared/terminalTypes";
@@ -46,6 +47,13 @@ const terminalApi: TerminalApi = {
     invoke<CommandHistoryEntry[]>("command_history_record", { request }),
 
   clearCommandHistory: () => invoke<CommandHistoryEntry[]>("command_history_clear"),
+
+  getTerminalSessions: () => invoke<TerminalSessionsSnapshot>("terminal_sessions_get"),
+
+  saveTerminalSessions: (snapshot: TerminalSessionsSnapshot) =>
+    invoke<TerminalSessionsSnapshot>("terminal_sessions_save", { snapshot }),
+
+  clearTerminalSessions: () => invoke<TerminalSessionsSnapshot>("terminal_sessions_clear"),
 
   getShellIntegrationZshrcSnippet: () => invoke<string>("shell_integration_zshrc_snippet"),
 

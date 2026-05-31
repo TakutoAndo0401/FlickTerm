@@ -47,6 +47,9 @@ export type FeatureSettings = {
     enabled: boolean;
     acceptWithTab: boolean;
   };
+  sessionRestore: {
+    enabled: boolean;
+  };
 };
 
 export type AppSettings = {
@@ -129,6 +132,24 @@ export type ShellIntegrationStatusEvent = {
   detected: boolean;
 };
 
+export type TerminalSessionTab = {
+  id: string;
+  title: string;
+  shell: string;
+  cwd?: string;
+  cols: number;
+  rows: number;
+  serialized: string;
+  updatedAt: string;
+};
+
+export type TerminalSessionsSnapshot = {
+  version: number;
+  activeTabId?: string;
+  tabs: TerminalSessionTab[];
+  closedTabs: TerminalSessionTab[];
+};
+
 export type UpdateInstallResult = {
   available: boolean;
   version?: string;
@@ -141,6 +162,9 @@ export type TerminalApi = {
   listCommandHistory: () => Promise<CommandHistoryEntry[]>;
   recordCommandHistory: (request: CommandHistoryRecordRequest) => Promise<CommandHistoryEntry[]>;
   clearCommandHistory: () => Promise<CommandHistoryEntry[]>;
+  getTerminalSessions: () => Promise<TerminalSessionsSnapshot>;
+  saveTerminalSessions: (snapshot: TerminalSessionsSnapshot) => Promise<TerminalSessionsSnapshot>;
+  clearTerminalSessions: () => Promise<TerminalSessionsSnapshot>;
   getShellIntegrationZshrcSnippet: () => Promise<string>;
   installShellIntegrationZshrc: () => Promise<string>;
   installUpdateIfAvailable: () => Promise<UpdateInstallResult>;

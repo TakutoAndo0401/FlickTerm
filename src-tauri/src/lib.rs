@@ -2,6 +2,7 @@ mod command_history;
 mod settings;
 mod shell_integration;
 mod terminal;
+mod terminal_sessions;
 mod types;
 
 use command_history::CommandHistoryStore;
@@ -9,15 +10,17 @@ use settings::SettingsStore;
 use std::sync::Arc;
 use tauri::{Manager, State};
 use terminal::PtyManager;
+use terminal_sessions::TerminalSessionsStore;
 use types::{
     AppSettings, AppSettingsSnapshot, CommandHistoryEntry, CommandHistoryRecordRequest,
     CreateTerminalRequest, CreateTerminalResponse, QuickCommand, TerminalKillRequest,
-    TerminalResizeRequest, TerminalWriteRequest,
+    TerminalResizeRequest, TerminalSessionsSnapshot, TerminalWriteRequest,
 };
 
 struct AppState {
     settings: Arc<SettingsStore>,
     command_history: Arc<CommandHistoryStore>,
+    terminal_sessions: Arc<TerminalSessionsStore>,
     pty: PtyManager,
 }
 
@@ -73,6 +76,33 @@ fn command_history_record(
 fn command_history_clear(state: State<'_, AppState>) -> Result<Vec<CommandHistoryEntry>, String> {
     state
         .command_history
+        .clear()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn terminal_sessions_get(state: State<'_, AppState>) -> Result<TerminalSessionsSnapshot, String> {
+    state
+        .terminal_sessions
+        .get()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn terminal_sessions_save(
+    snapshot: TerminalSessionsSnapshot,
+    state: State<'_, AppState>,
+) -> Result<TerminalSessionsSnapshot, String> {
+    state
+        .terminal_sessions
+        .save(snapshot)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn terminal_sessions_clear(state: State<'_, AppState>) -> Result<TerminalSessionsSnapshot, String> {
+    state
+        .terminal_sessions
         .clear()
         .map_err(|error| error.to_string())
 }
@@ -162,10 +192,13 @@ pub fn run() {
             settings.load()?;
             let command_history = Arc::new(CommandHistoryStore::new(app.handle().clone())?);
             command_history.load()?;
+            let terminal_sessions = Arc::new(TerminalSessionsStore::new(app.handle().clone())?);
+            terminal_sessions.load()?;
 
             app.manage(AppState {
                 settings,
                 command_history,
+                terminal_sessions,
                 pty: PtyManager::default(),
             });
 
@@ -178,6 +211,9 @@ pub fn run() {
             command_history_list,
             command_history_record,
             command_history_clear,
+            terminal_sessions_get,
+            terminal_sessions_save,
+            terminal_sessions_clear,
             shell_integration_zshrc_snippet,
             shell_integration_install_zshrc,
             terminal_create,

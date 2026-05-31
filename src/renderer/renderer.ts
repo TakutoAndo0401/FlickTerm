@@ -14,6 +14,8 @@ import type {
   QuickCommandRunMode,
   ShortcutBinding,
   ShortcutScope,
+  TerminalSessionTab,
+  TerminalSessionsSnapshot,
   TerminalTab
 } from "../shared/terminalTypes";
 
@@ -44,6 +46,12 @@ type TerminalInputState = {
   historyPanel: HTMLDivElement;
   historyInput: HTMLInputElement;
   historyResults: HTMLDivElement;
+  searchPanel: HTMLDivElement;
+  searchInput: HTMLInputElement;
+  searchStatus: HTMLDivElement;
+  searchQuery: string;
+  searchResultCount: number;
+  searchResultIndex: number;
 };
 
 const tabsElement = getElement("tabs");
@@ -125,7 +133,9 @@ const settingsCopy = {
       newTab: "New Tab",
       closeTab: "Close Tab",
       nextTab: "Next Tab",
-      previousTab: "Previous Tab"
+      previousTab: "Previous Tab",
+      findInTerminal: "Find in Terminal",
+      reopenClosedTab: "Reopen Closed Tab"
     },
     appearance: {
       language: "Language",
@@ -159,6 +169,8 @@ const settingsCopy = {
       autosuggestionsHint: "Show the best matching command as ghost text",
       acceptWithTab: "Accept With Tab",
       acceptWithTabHint: "Use Tab for autosuggestions instead of passing it to the shell",
+      sessionRestore: "Session Restore",
+      sessionRestoreHint: "Save terminal screens and reopen closed tabs",
       enabled: "Enabled",
       disabled: "Disabled"
     },
@@ -255,7 +267,9 @@ const settingsCopy = {
       newTab: "新しいタブ",
       closeTab: "タブを閉じる",
       nextTab: "次のタブ",
-      previousTab: "前のタブ"
+      previousTab: "前のタブ",
+      findInTerminal: "ターミナル内を検索",
+      reopenClosedTab: "閉じたタブを復元"
     },
     appearance: {
       language: "言語",
@@ -289,6 +303,8 @@ const settingsCopy = {
       autosuggestionsHint: "最も一致するコマンドを薄い文字で表示",
       acceptWithTab: "Tab で候補を採用",
       acceptWithTabHint: "Tab をシェルへ渡さず自動候補の採用に使う",
+      sessionRestore: "セッション復元",
+      sessionRestoreHint: "ターミナル画面を保存し、閉じたタブを復元",
       enabled: "有効",
       disabled: "無効"
     },
@@ -355,6 +371,8 @@ const fixedShortcutActions: FixedShortcutAction[] = [
   { id: "closeTab", labelKey: "closeTab", defaultScope: "app" },
   { id: "nextTab", labelKey: "nextTab", defaultScope: "app" },
   { id: "previousTab", labelKey: "previousTab", defaultScope: "app" },
+  { id: "findInTerminal", labelKey: "findInTerminal", defaultScope: "app" },
+  { id: "reopenClosedTab", labelKey: "reopenClosedTab", defaultScope: "app" },
   ...Array.from({ length: 9 }, (_, index) => ({
     id: `selectTab:${index + 1}`,
     labelKey: "newTab" as const,
@@ -367,6 +385,9 @@ const commandPanelWidthMin = 120;
 const commandPanelWidthMax = 360;
 const commandPanelKeyboardStep = 10;
 const historySearchResultLimit = 8;
+const sessionSerializeScrollback = 1000;
+const sessionSaveDebounceMs = 2000;
+const closedTabsLimit = 10;
 const fontFamilyOptions = [
   { label: "Menlo", value: "Menlo, Monaco, Consolas, 'Courier New', monospace" },
   { label: "Monaco", value: "Monaco, Menlo, Consolas, 'Courier New', monospace" },
@@ -382,6 +403,7 @@ const cursorStyleValues = new Set<string>(cursorStyleOptions.map((option) => opt
 
 const tabs = new Map<string, RendererTerminalTab>();
 const inputStates = new Map<string, TerminalInputState>();
+const pendingTerminalData = new Map<string, Uint8Array[]>();
 let activeTabId: string | null = null;
 let resizeTimer: number | undefined;
 let commandPanelWidth = commandPanelWidthDefault;
@@ -410,6 +432,11 @@ let activeHistorySearch:
       results: CommandHistoryEntry[];
     }
   | null = null;
+let activeTerminalSearchTabId: string | null = null;
+let sessionSaveTimer: number | undefined;
+let sessionSaveSignature = "";
+let closedSessionTabs: TerminalSessionTab[] = [];
+let isRestoringSessions = false;
 let activeSettingsConfirmation:
   | {
       resolve: (confirmed: boolean) => void;
@@ -424,8 +451,18 @@ let activeCommandConfirmation:
   | null = null;
 
 window.terminalApi.onTerminalData(({ id, data }) => {
-  tabs.get(id)?.terminal.write(new Uint8Array(data), () => {
+  const chunk = new Uint8Array(data);
+  const view = tabs.get(id);
+  if (!view) {
+    const pending = pendingTerminalData.get(id) ?? [];
+    pending.push(chunk);
+    pendingTerminalData.set(id, pending);
+    return;
+  }
+
+  view.terminal.write(chunk, () => {
     scheduleSuggestionUpdate(id);
+    markSessionsDirty();
   });
 });
 
@@ -491,6 +528,11 @@ document.addEventListener(
 
     if (activeHistorySearch) {
       handleHistorySearchKeydown(event);
+      return;
+    }
+
+    if (activeTerminalSearchTabId) {
+      handleTerminalSearchKeydown(event);
       return;
     }
 
@@ -746,7 +788,42 @@ async function init(): Promise<void> {
   shellIntegrationSnippet = await window.terminalApi.getShellIntegrationZshrcSnippet();
   commandHistory = await window.terminalApi.listCommandHistory();
   renderQuickCommands();
-  await createTab();
+  await restoreTerminalSessions();
+}
+
+window.addEventListener("beforeunload", () => {
+  void saveTerminalSessionsNow();
+});
+
+async function restoreTerminalSessions(): Promise<void> {
+  if (!appSettings?.features.sessionRestore.enabled) {
+    await window.terminalApi.clearTerminalSessions();
+    await createTab();
+    return;
+  }
+
+  const snapshot = await window.terminalApi.getTerminalSessions();
+  closedSessionTabs = snapshot.closedTabs.slice(0, closedTabsLimit);
+
+  if (snapshot.tabs.length === 0) {
+    await createTab();
+    return;
+  }
+
+  isRestoringSessions = true;
+  try {
+    for (const tab of snapshot.tabs) {
+      await createTabFromSession(tab);
+    }
+
+    const activeId = snapshot.activeTabId && tabs.has(snapshot.activeTabId) ? snapshot.activeTabId : snapshot.tabs[0]?.id;
+    if (activeId) {
+      activateTab(activeId);
+    }
+    sessionSaveSignature = getTerminalSessionsSignature(buildTerminalSessionsSnapshot());
+  } finally {
+    isRestoringSessions = false;
+  }
 }
 
 async function reloadSettings(): Promise<void> {
@@ -768,6 +845,28 @@ async function createTab(): Promise<void> {
 
   attachTerminal(response.tab);
   activateTab(response.tab.id);
+  markSessionsDirty();
+}
+
+async function createTabFromSession(session: TerminalSessionTab): Promise<string> {
+  const id = tabs.has(session.id) ? `terminal-${crypto.randomUUID()}` : session.id;
+  const response = await window.terminalApi.createTerminal({
+    id,
+    title: session.title,
+    cols: session.cols,
+    rows: session.rows
+  });
+
+  attachTerminal(response.tab, { deferPendingData: true });
+  const view = tabs.get(response.tab.id);
+  if (view && session.serialized.length > 0) {
+    const restored = prepareSerializedSessionForRestore(session.serialized);
+    if (restored.length > 0) {
+      view.terminal.write(restored);
+    }
+  }
+  flushPendingTerminalData(response.tab.id);
+  return response.tab.id;
 }
 
 function nextTerminalTitle(): string {
@@ -788,13 +887,16 @@ function nextTerminalTitle(): string {
   return `zsh ${candidate}`;
 }
 
-function attachTerminal(tab: TerminalTab): void {
+function attachTerminal(tab: TerminalTab, options: { deferPendingData?: boolean } = {}): void {
   const view = createTerminalView(tab, getActiveAppearance());
 
   tabs.set(tab.id, view);
   terminalHost.append(view.element);
   view.terminal.open(view.element);
   inputStates.set(tab.id, createTerminalInputState(view));
+  if (!options.deferPendingData) {
+    flushPendingTerminalData(tab.id);
+  }
   view.terminal.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(tab.id, event));
   view.terminal.onData((data) => {
     if (handleTerminalInputData(tab.id, data)) {
@@ -804,14 +906,43 @@ function attachTerminal(tab: TerminalTab): void {
   });
   view.terminal.onResize(({ cols, rows }) => {
     window.terminalApi.resizeTerminal({ id: tab.id, cols, rows });
+    markSessionsDirty();
+  });
+
+  view.searchAddon.onDidChangeResults(({ resultCount, resultIndex }) => {
+    const state = inputStates.get(tab.id);
+    if (!state) {
+      return;
+    }
+    state.searchResultCount = resultCount;
+    state.searchResultIndex = resultIndex;
+    renderTerminalSearchStatus(state);
   });
 
   renderTabs();
 }
 
+function flushPendingTerminalData(tabId: string): void {
+  const view = tabs.get(tabId);
+  const pending = pendingTerminalData.get(tabId);
+  if (!view || !pending) {
+    return;
+  }
+
+  pendingTerminalData.delete(tabId);
+  for (const chunk of pending) {
+    view.terminal.write(chunk);
+  }
+  markSessionsDirty();
+}
+
 function activateTab(id: string): void {
   if (!tabs.has(id)) {
     return;
+  }
+
+  if (activeTerminalSearchTabId && activeTerminalSearchTabId !== id) {
+    closeTerminalSearch(activeTerminalSearchTabId);
   }
 
   activeTabId = id;
@@ -831,6 +962,7 @@ function activateTab(id: string): void {
   }
 
   renderTabs();
+  markSessionsDirty();
 }
 
 function closeActiveTab(): void {
@@ -847,6 +979,10 @@ function closeTab(id: string): void {
     return;
   }
 
+  rememberClosedTab(view);
+  if (activeTerminalSearchTabId === id) {
+    closeTerminalSearch(id);
+  }
   window.terminalApi.killTerminal({ id });
   view.terminal.dispose();
   view.element.remove();
@@ -868,6 +1004,128 @@ function closeTab(id: string): void {
   } else {
     renderTabs();
   }
+  markSessionsDirty();
+}
+
+async function reopenClosedTab(): Promise<void> {
+  if (!appSettings?.features.sessionRestore.enabled || closedSessionTabs.length === 0) {
+    return;
+  }
+
+  const [session, ...rest] = closedSessionTabs;
+  if (!session) {
+    return;
+  }
+
+  closedSessionTabs = rest;
+  const restoredId = await createTabFromSession(session);
+  activateTab(restoredId);
+  markSessionsDirty();
+}
+
+function rememberClosedTab(view: RendererTerminalTab): void {
+  if (!appSettings?.features.sessionRestore.enabled || isRestoringSessions) {
+    return;
+  }
+
+  closedSessionTabs = [serializeSessionTab(view), ...closedSessionTabs].slice(0, closedTabsLimit);
+}
+
+function markSessionsDirty(): void {
+  if (isRestoringSessions || !appSettings?.features.sessionRestore.enabled) {
+    return;
+  }
+
+  window.clearTimeout(sessionSaveTimer);
+  sessionSaveTimer = window.setTimeout(() => {
+    saveTerminalSessionsNow().catch((error) => {
+      console.warn("Failed to save terminal sessions", error);
+    });
+  }, sessionSaveDebounceMs);
+}
+
+async function saveTerminalSessionsNow(): Promise<void> {
+  if (!appSettings?.features.sessionRestore.enabled) {
+    return;
+  }
+
+  const snapshot = buildTerminalSessionsSnapshot();
+  const signature = getTerminalSessionsSignature(snapshot);
+  if (signature === sessionSaveSignature) {
+    return;
+  }
+
+  await window.terminalApi.saveTerminalSessions(snapshot);
+  sessionSaveSignature = signature;
+}
+
+function buildTerminalSessionsSnapshot(): TerminalSessionsSnapshot {
+  return {
+    version: 1,
+    activeTabId: activeTabId ?? undefined,
+    tabs: Array.from(tabs.values()).map(serializeSessionTab),
+    closedTabs: closedSessionTabs.slice(0, closedTabsLimit)
+  };
+}
+
+function serializeSessionTab(view: RendererTerminalTab): TerminalSessionTab {
+  return {
+    id: view.metadata.id,
+    title: view.metadata.title,
+    shell: view.metadata.shell,
+    cwd: view.metadata.cwd,
+    cols: view.terminal.cols,
+    rows: view.terminal.rows,
+    serialized: view.serializeAddon.serialize({
+      scrollback: sessionSerializeScrollback,
+      excludeAltBuffer: true
+    }),
+    updatedAt: String(Date.now())
+  };
+}
+
+function prepareSerializedSessionForRestore(serialized: string): string {
+  const lines = serialized
+    .replaceAll(/\x1b\[\?2004[hl]/g, "")
+    .split(/\r\n|\n|\r/);
+
+  while (lines.length > 0 && isRestoredPromptOnlyLine(lines[lines.length - 1] ?? "")) {
+    lines.pop();
+  }
+
+  const restored = lines.join("\r\n");
+  if (restored.length === 0) {
+    return "";
+  }
+
+  return /[\r\n]$/.test(restored) ? restored : `${restored}\r\n`;
+}
+
+function isRestoredPromptOnlyLine(line: string): boolean {
+  const plain = stripTerminalControlSequences(line).trimEnd();
+  if (plain.length === 0) {
+    return true;
+  }
+  if (/^[%#$>]$/.test(plain)) {
+    return true;
+  }
+
+  return /^[^\s@]+@[^\s]+ .+ [%#$>](?:\s*[%#$>])?$/.test(plain);
+}
+
+function stripTerminalControlSequences(value: string): string {
+  return value
+    .replaceAll(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+    .replaceAll(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replaceAll(/\x1b./g, "");
+}
+
+function getTerminalSessionsSignature(snapshot: TerminalSessionsSnapshot): string {
+  return JSON.stringify({
+    activeTabId: snapshot.activeTabId,
+    tabs: snapshot.tabs.map(({ updatedAt: _updatedAt, ...tab }) => tab),
+    closedTabs: snapshot.closedTabs.map(({ updatedAt: _updatedAt, ...tab }) => tab)
+  });
 }
 
 function activateRelativeTab(direction: 1 | -1): void {
@@ -1051,6 +1309,18 @@ function runShortcutAction(actionId: string): void {
 
   if (actionId === "previousTab") {
     activateRelativeTab(-1);
+    return;
+  }
+
+  if (actionId === "findInTerminal") {
+    openTerminalSearch();
+    return;
+  }
+
+  if (actionId === "reopenClosedTab") {
+    reopenClosedTab().catch((error) => {
+      console.error("Failed to reopen closed tab", error);
+    });
     return;
   }
 
@@ -1458,6 +1728,17 @@ function renderFeaturesEditor(): void {
         }
         draftSettings.features.autosuggestions.acceptWithTab = checked;
       }
+    ),
+    createFeatureCheckboxRow(
+      text.features.sessionRestore,
+      text.features.sessionRestoreHint,
+      draftSettings.features.sessionRestore.enabled,
+      (checked) => {
+        if (!draftSettings) {
+          return;
+        }
+        draftSettings.features.sessionRestore.enabled = checked;
+      }
     )
   );
 }
@@ -1719,6 +2000,29 @@ function createAppearanceRow(labelText: string, hintText: string, control: HTMLE
 function createTerminalInputState(view: RendererTerminalTab): TerminalInputState {
   const suggestionOverlay = document.createElement("div");
   suggestionOverlay.className = "suggestion-overlay";
+
+  const searchPanel = document.createElement("div");
+  searchPanel.className = "terminal-search-panel";
+  const searchInput = document.createElement("input");
+  searchInput.type = "search";
+  searchInput.className = "terminal-search-input";
+  searchInput.placeholder = "Find in terminal";
+  const previousButton = document.createElement("button");
+  previousButton.type = "button";
+  previousButton.className = "terminal-search-button";
+  previousButton.textContent = "Prev";
+  const nextButton = document.createElement("button");
+  nextButton.type = "button";
+  nextButton.className = "terminal-search-button";
+  nextButton.textContent = "Next";
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "terminal-search-button";
+  closeButton.textContent = "x";
+  const searchStatus = document.createElement("div");
+  searchStatus.className = "terminal-search-status";
+  searchPanel.append(searchInput, searchStatus, previousButton, nextButton, closeButton);
+
   const historyPanel = document.createElement("div");
   historyPanel.className = "history-search-panel";
   const historyInput = document.createElement("input");
@@ -1728,7 +2032,22 @@ function createTerminalInputState(view: RendererTerminalTab): TerminalInputState
   const historyResults = document.createElement("div");
   historyResults.className = "history-search-results";
   historyPanel.append(historyInput, historyResults);
-  view.element.append(suggestionOverlay, historyPanel);
+  view.element.append(suggestionOverlay, searchPanel, historyPanel);
+
+  searchInput.addEventListener("input", () => {
+    runTerminalSearch(view.metadata.id, "next", true);
+  });
+  previousButton.addEventListener("click", () => {
+    runTerminalSearch(view.metadata.id, "previous", false);
+    searchInput.focus();
+  });
+  nextButton.addEventListener("click", () => {
+    runTerminalSearch(view.metadata.id, "next", false);
+    searchInput.focus();
+  });
+  closeButton.addEventListener("click", () => {
+    closeTerminalSearch(view.metadata.id);
+  });
 
   historyInput.addEventListener("input", () => {
     if (!activeHistorySearch || activeHistorySearch.tabId !== view.metadata.id) {
@@ -1748,6 +2067,12 @@ function createTerminalInputState(view: RendererTerminalTab): TerminalInputState
     dismissedSuggestionFor: "",
     suggestion: null,
     suggestionOverlay,
+    searchPanel,
+    searchInput,
+    searchStatus,
+    searchQuery: "",
+    searchResultCount: 0,
+    searchResultIndex: -1,
     historyPanel,
     historyInput,
     historyResults
@@ -2069,6 +2394,125 @@ function closeHistorySearch(): void {
     state.suggestion = null;
     hideSuggestion(state);
   }
+}
+
+function openTerminalSearch(): void {
+  if (!activeTabId) {
+    return;
+  }
+
+  const state = inputStates.get(activeTabId);
+  const view = tabs.get(activeTabId);
+  if (!state || !view) {
+    return;
+  }
+
+  closeHistorySearch();
+  activeTerminalSearchTabId = activeTabId;
+  state.suggestion = null;
+  hideSuggestion(state);
+  state.searchPanel.classList.add("is-open");
+  state.searchInput.value = state.searchQuery;
+  renderTerminalSearchStatus(state);
+  if (state.searchQuery.length > 0) {
+    runTerminalSearch(activeTabId, "next", true);
+  }
+  state.searchInput.focus();
+  state.searchInput.select();
+}
+
+function closeTerminalSearch(tabId = activeTerminalSearchTabId): void {
+  if (!tabId) {
+    return;
+  }
+
+  const state = inputStates.get(tabId);
+  const view = tabs.get(tabId);
+  if (state) {
+    state.searchPanel.classList.remove("is-open");
+    state.searchResultCount = 0;
+    state.searchResultIndex = -1;
+    renderTerminalSearchStatus(state);
+  }
+  view?.searchAddon.clearDecorations();
+  view?.terminal.clearSelection();
+  if (activeTerminalSearchTabId === tabId) {
+    activeTerminalSearchTabId = null;
+  }
+  view?.terminal.focus();
+}
+
+function handleTerminalSearchKeydown(event: KeyboardEvent): void {
+  if (!activeTerminalSearchTabId) {
+    return;
+  }
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeTerminalSearch(activeTerminalSearchTabId);
+    return;
+  }
+
+  if (event.key === "Enter") {
+    event.preventDefault();
+    runTerminalSearch(activeTerminalSearchTabId, event.shiftKey ? "previous" : "next", false);
+    return;
+  }
+
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "g") {
+    event.preventDefault();
+    runTerminalSearch(activeTerminalSearchTabId, event.shiftKey ? "previous" : "next", false);
+  }
+}
+
+function runTerminalSearch(tabId: string, direction: "next" | "previous", incremental: boolean): void {
+  const state = inputStates.get(tabId);
+  const view = tabs.get(tabId);
+  if (!state || !view) {
+    return;
+  }
+
+  const query = state.searchInput.value;
+  state.searchQuery = query;
+  if (query.length === 0) {
+    view.searchAddon.clearDecorations();
+    view.terminal.clearSelection();
+    state.searchResultCount = 0;
+    state.searchResultIndex = -1;
+    renderTerminalSearchStatus(state);
+    return;
+  }
+
+  const options = {
+    incremental,
+    decorations: {
+      matchBackground: "#544a24",
+      matchOverviewRuler: "#c9a227",
+      activeMatchBackground: "#8a5a1f",
+      activeMatchColorOverviewRuler: "#f59e0b"
+    }
+  };
+  const found =
+    direction === "previous" ? view.searchAddon.findPrevious(query, options) : view.searchAddon.findNext(query, options);
+  if (!found) {
+    state.searchResultCount = 0;
+    state.searchResultIndex = -1;
+    renderTerminalSearchStatus(state);
+  }
+}
+
+function renderTerminalSearchStatus(state: TerminalInputState): void {
+  if (state.searchQuery.length === 0) {
+    state.searchStatus.textContent = "";
+    return;
+  }
+
+  if (state.searchResultCount <= 0) {
+    state.searchStatus.textContent = "No results";
+    return;
+  }
+
+  state.searchStatus.textContent = `${state.searchResultIndex + 1}/${state.searchResultCount}`;
 }
 
 function handleHistorySearchKeydown(event: KeyboardEvent): void {
@@ -2395,6 +2839,13 @@ async function saveSettings(): Promise<void> {
     renderQuickCommands();
     applyAppearanceToTerminalViews(appSettings.appearance);
     updateActiveSuggestion();
+    if (!appSettings.features.sessionRestore.enabled) {
+      closedSessionTabs = [];
+      sessionSaveSignature = "";
+      await window.terminalApi.clearTerminalSessions();
+    } else {
+      markSessionsDirty();
+    }
     renderSettingsModal();
     showSettingsNotice(snapshot.notice ?? "");
 
@@ -2830,7 +3281,8 @@ function cloneSettings(settings: AppSettings): AppSettings {
 function cloneFeatures(features: FeatureSettings): FeatureSettings {
   return {
     commandHistory: { ...features.commandHistory },
-    autosuggestions: { ...features.autosuggestions }
+    autosuggestions: { ...features.autosuggestions },
+    sessionRestore: { ...features.sessionRestore }
   };
 }
 

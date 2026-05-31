@@ -90,9 +90,16 @@ pub struct AutosuggestionSettings {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionRestoreSettings {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FeatureSettings {
     pub command_history: CommandHistorySettings,
     pub autosuggestions: AutosuggestionSettings,
+    pub session_restore: SessionRestoreSettings,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -199,4 +206,37 @@ pub struct CommandHistoryRecordRequest {
 pub struct ShellIntegrationStatusEvent {
     pub id: String,
     pub detected: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSessionTab {
+    pub id: String,
+    pub title: String,
+    pub shell: String,
+    pub cwd: Option<String>,
+    pub cols: u16,
+    pub rows: u16,
+    pub serialized: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSessionsSnapshot {
+    pub version: u8,
+    pub active_tab_id: Option<String>,
+    pub tabs: Vec<TerminalSessionTab>,
+    pub closed_tabs: Vec<TerminalSessionTab>,
+}
+
+impl Default for TerminalSessionsSnapshot {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            active_tab_id: None,
+            tabs: Vec::new(),
+            closed_tabs: Vec::new(),
+        }
+    }
 }

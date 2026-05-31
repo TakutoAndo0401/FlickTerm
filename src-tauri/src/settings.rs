@@ -1,7 +1,8 @@
 use crate::types::{
     AppLanguage, AppSettings, AppSettingsSnapshot, AppearanceSettings, AutosuggestionSettings,
     CommandHistorySettings, CursorStyle, FeatureSettings, LayoutSettings, QuickCommand,
-    QuickCommandRunMode, ShortcutBinding, ShortcutRegistrationError, ShortcutScope,
+    QuickCommandRunMode, SessionRestoreSettings, ShortcutBinding, ShortcutRegistrationError,
+    ShortcutScope,
 };
 use serde_json::Value;
 use std::{
@@ -375,6 +376,9 @@ fn normalize_features(value: Option<&Value>) -> FeatureSettings {
     let autosuggestions = object
         .and_then(|object| object.get("autosuggestions"))
         .and_then(Value::as_object);
+    let session_restore = object
+        .and_then(|object| object.get("sessionRestore"))
+        .and_then(Value::as_object);
 
     let max_entries = command_history
         .and_then(|object| object.get("maxEntries"))
@@ -407,6 +411,12 @@ fn normalize_features(value: Option<&Value>) -> FeatureSettings {
                 .and_then(|object| object.get("acceptWithTab"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+        },
+        session_restore: SessionRestoreSettings {
+            enabled: session_restore
+                .and_then(|object| object.get("enabled"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
         },
     }
 }
@@ -474,6 +484,18 @@ fn default_settings() -> AppSettings {
         "CmdOrCtrl+Shift+[",
         ShortcutScope::App,
     );
+    insert_shortcut(
+        &mut shortcuts,
+        "findInTerminal",
+        "CmdOrCtrl+F",
+        ShortcutScope::App,
+    );
+    insert_shortcut(
+        &mut shortcuts,
+        "reopenClosedTab",
+        "CmdOrCtrl+Shift+T",
+        ShortcutScope::App,
+    );
     for index in 1..=9 {
         insert_shortcut(
             &mut shortcuts,
@@ -507,6 +529,7 @@ fn default_settings() -> AppSettings {
                 enabled: true,
                 accept_with_tab: false,
             },
+            session_restore: SessionRestoreSettings { enabled: true },
         },
     }
 }

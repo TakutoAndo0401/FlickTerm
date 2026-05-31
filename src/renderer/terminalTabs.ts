@@ -1,4 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Terminal } from "@xterm/xterm";
@@ -8,11 +11,14 @@ export type RendererTerminalTab = {
   metadata: TerminalTab;
   terminal: Terminal;
   fitAddon: FitAddon;
+  searchAddon: SearchAddon;
+  serializeAddon: SerializeAddon;
   element: HTMLDivElement;
 };
 
 export function createTerminalView(tab: TerminalTab, appearance: AppearanceSettings): RendererTerminalTab {
   const terminal = new Terminal({
+    allowProposedApi: true,
     cursorBlink: true,
     cursorStyle: appearance.cursorStyle,
     fontFamily: appearance.fontFamily,
@@ -29,8 +35,15 @@ export function createTerminalView(tab: TerminalTab, appearance: AppearanceSetti
   });
 
   const fitAddon = new FitAddon();
+  const searchAddon = new SearchAddon();
+  const serializeAddon = new SerializeAddon();
+  const unicode11Addon = new Unicode11Addon();
   terminal.loadAddon(fitAddon);
+  terminal.loadAddon(searchAddon);
+  terminal.loadAddon(serializeAddon);
+  terminal.loadAddon(unicode11Addon);
   terminal.loadAddon(new WebLinksAddon(handleWebLink));
+  terminal.unicode.activeVersion = "11";
 
   const element = document.createElement("div");
   element.className = "terminal-pane";
@@ -40,6 +53,8 @@ export function createTerminalView(tab: TerminalTab, appearance: AppearanceSetti
     metadata: tab,
     terminal,
     fitAddon,
+    searchAddon,
+    serializeAddon,
     element
   };
 }
