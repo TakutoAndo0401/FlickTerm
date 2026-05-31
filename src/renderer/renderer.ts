@@ -383,7 +383,6 @@ const cursorStyleValues = new Set<string>(cursorStyleOptions.map((option) => opt
 const tabs = new Map<string, RendererTerminalTab>();
 const inputStates = new Map<string, TerminalInputState>();
 let activeTabId: string | null = null;
-let tabCounter = 0;
 let resizeTimer: number | undefined;
 let commandPanelWidth = commandPanelWidthDefault;
 let commandPanelResizeState:
@@ -758,9 +757,8 @@ async function reloadSettings(): Promise<void> {
 }
 
 async function createTab(): Promise<void> {
-  tabCounter += 1;
   const id = `terminal-${crypto.randomUUID()}`;
-  const title = `zsh ${tabCounter}`;
+  const title = nextTerminalTitle();
   const response = await window.terminalApi.createTerminal({
     id,
     title,
@@ -770,6 +768,24 @@ async function createTab(): Promise<void> {
 
   attachTerminal(response.tab);
   activateTab(response.tab.id);
+}
+
+function nextTerminalTitle(): string {
+  const usedNumbers = new Set<number>();
+
+  for (const view of tabs.values()) {
+    const match = /^zsh ([1-9]\d*)$/.exec(view.metadata.title);
+    if (match) {
+      usedNumbers.add(Number(match[1]));
+    }
+  }
+
+  let candidate = 1;
+  while (usedNumbers.has(candidate)) {
+    candidate += 1;
+  }
+
+  return `zsh ${candidate}`;
 }
 
 function attachTerminal(tab: TerminalTab): void {
