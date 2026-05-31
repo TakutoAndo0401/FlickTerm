@@ -394,8 +394,9 @@ button {
 .settings-dialog {
   position: relative;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
-  width: min(880px, calc(100vw - 56px));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(1040px, calc(100vw - 56px));
+  height: min(720px, calc(100vh - 56px));
   max-height: min(720px, calc(100vh - 56px));
   overflow: hidden;
   border: 1px solid #2d333b;
@@ -444,26 +445,52 @@ button {
   background: #2a3038;
 }
 
+.settings-body {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.settings-sidebar {
+  min-height: 0;
+  padding: 12px;
+  border-right: 1px solid #252a30;
+  background: #15181d;
+}
+
 .settings-tabs {
-  display: flex;
+  display: grid;
   gap: 4px;
-  padding: 10px 16px 0;
 }
 
 .settings-tab {
-  min-width: 104px;
-  height: 32px;
-  border: 1px solid #2b3139;
-  border-bottom: 0;
-  border-radius: 6px 6px 0 0;
+  width: 100%;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
   color: #aeb5bf;
-  background: #1c2026;
+  background: transparent;
   cursor: pointer;
+  text-align: left;
 }
 
 .settings-tab.is-active {
   color: #ffffff;
+  border-color: #2b3139;
+  background: #2563c7;
+}
+
+.settings-tab:hover:not(.is-active) {
+  color: #e3e7ec;
   background: #20252b;
+}
+
+.settings-content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
 }
 
 .settings-status {
@@ -714,6 +741,34 @@ button {
 
 .settings-footer-spacer {
   flex: 1;
+}
+
+@media (max-width: 720px) {
+  .settings-dialog {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .settings-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-sidebar {
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid #252a30;
+  }
+
+  .settings-tabs {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .settings-tab {
+    padding: 0 8px;
+    text-align: center;
+  }
 }
 
 .settings-confirm-backdrop {

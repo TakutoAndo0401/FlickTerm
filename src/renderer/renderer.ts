@@ -1128,7 +1128,9 @@ function renderSettingsModal(): void {
   renderSettingsCopy();
 
   for (const tabButton of settingsTabs) {
-    tabButton.classList.toggle("is-active", tabButton.dataset.settingsTab === settingsTab);
+    const isActive = tabButton.dataset.settingsTab === settingsTab;
+    tabButton.classList.toggle("is-active", isActive);
+    tabButton.setAttribute("aria-selected", String(isActive));
   }
 
   settingsCommandsPanel.classList.toggle("is-active", settingsTab === "commands");
