@@ -583,7 +583,7 @@ button {
 .command-editor-header,
 .command-editor-row {
   display: grid;
-  grid-template-columns: minmax(120px, 0.9fr) minmax(240px, 1.8fr) 104px 76px;
+  grid-template-columns: 28px minmax(120px, 0.9fr) minmax(240px, 1.8fr) 104px 76px;
   gap: 8px;
   align-items: center;
 }
@@ -620,6 +620,66 @@ button {
 .command-editor-row,
 .shortcut-editor-row {
   min-height: 36px;
+}
+
+.command-editor-row {
+  position: relative;
+}
+
+.command-editor-row.is-dragging {
+  opacity: 0.55;
+}
+
+.command-editor-row::before,
+.command-editor-row::after {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 2px;
+  content: "";
+  background: transparent;
+}
+
+.command-editor-row.is-drop-before::before,
+.command-editor-row.is-drop-after::after {
+  background: #3f8cff;
+}
+
+.command-editor-row.is-drop-before::before {
+  top: -2px;
+}
+
+.command-editor-row.is-drop-after::after {
+  bottom: -2px;
+}
+
+.command-drag-handle {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #2b3139;
+  border-radius: 6px;
+  color: #8d96a3;
+  background: #1c2026;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.command-drag-handle:hover {
+  color: #eef2f6;
+  border-color: #3f8cff;
+  background: #232932;
+}
+
+.command-drag-handle:active {
+  cursor: grabbing;
+}
+
+.commands-editor.is-dragging-commands {
+  cursor: grabbing;
 }
 
 .appearance-editor,

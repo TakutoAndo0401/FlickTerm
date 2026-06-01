@@ -419,6 +419,14 @@ let appSettings: AppSettings | null = null;
 let draftSettings: AppSettings | null = null;
 let settingsTab: "commands" | "shortcuts" | "appearance" | "features" = "commands";
 let recordingActionId: string | null = null;
+let commandDragState:
+  | {
+      commandId: string;
+      pointerId: number;
+      targetCommandId: string | null;
+      insertBefore: boolean;
+    }
+  | null = null;
 let isSavingSettings = false;
 let commandHistory: CommandHistoryEntry[] = [];
 let shellIntegrationSnippet = "";
@@ -1191,7 +1199,7 @@ function renderTabs(): void {
 function renderQuickCommands(): void {
   quickCommandsElement.replaceChildren();
 
-  for (const command of appSettings?.commands ?? []) {
+  for (const command of draftSettings?.commands ?? appSettings?.commands ?? []) {
     quickCommandsElement.append(createQuickCommandButton(command));
   }
 }
@@ -1363,6 +1371,7 @@ function openSettings(): void {
     return;
   }
 
+  clearCommandDragState();
   draftSettings = cloneSettings(appSettings);
   recordingActionId = null;
   settingsTab = "commands";
@@ -1387,11 +1396,13 @@ async function closeSettingsWithConfirmation(): Promise<void> {
 
 function closeSettings(): void {
   resolveSettingsConfirmation(false);
+  clearCommandDragState();
   recordingActionId = null;
   draftSettings = null;
   isSavingSettings = false;
   settingsOverlay.classList.remove("is-open");
   settingsOverlay.setAttribute("aria-hidden", "true");
+  renderQuickCommands();
 }
 
 function isSettingsOpen(): boolean {
@@ -1412,6 +1423,7 @@ function renderSettingsModal(): void {
   }
 
   renderSettingsCopy();
+  renderQuickCommands();
 
   for (const tabButton of settingsTabs) {
     const isActive = tabButton.dataset.settingsTab === settingsTab;
@@ -1456,9 +1468,9 @@ function renderSettingsCopy(): void {
   saveSettingsButton.textContent = text.buttons.save;
 
   const commandHeader = Array.from(settingsCommandsPanel.querySelectorAll(".command-editor-header span"));
-  commandHeader[0]?.replaceChildren(text.headers.label);
-  commandHeader[1]?.replaceChildren(text.headers.command);
-  commandHeader[2]?.replaceChildren(text.headers.mode);
+  commandHeader[1]?.replaceChildren(text.headers.label);
+  commandHeader[2]?.replaceChildren(text.headers.command);
+  commandHeader[3]?.replaceChildren(text.headers.mode);
 
   const shortcutHeader = Array.from(settingsShortcutsPanel.querySelectorAll(".shortcut-editor-header span"));
   shortcutHeader[0]?.replaceChildren(text.headers.action);
@@ -1472,15 +1484,50 @@ function renderCommandEditor(): void {
   }
 
   const text = copy();
+  const draggingCommandId = commandDragState?.commandId ?? null;
+  const dropTargetCommandId = commandDragState?.targetCommandId ?? null;
   commandsEditorElement.replaceChildren();
 
   for (const command of draftSettings.commands) {
     const row = document.createElement("div");
     row.className = "command-editor-row";
+    row.dataset.commandId = command.id;
+    row.classList.toggle("is-dragging", draggingCommandId === command.id);
+    row.classList.toggle("is-drop-before", dropTargetCommandId === command.id && commandDragState?.insertBefore === true);
+    row.classList.toggle("is-drop-after", dropTargetCommandId === command.id && commandDragState?.insertBefore === false);
+
+    const dragHandle = document.createElement("button");
+    dragHandle.type = "button";
+    dragHandle.className = "command-drag-handle";
+    dragHandle.title = settingsLanguage() === "ja" ? "ドラッグして並び替え" : "Drag to reorder";
+    dragHandle.setAttribute("aria-label", dragHandle.title);
+    dragHandle.textContent = "⋮⋮";
+    dragHandle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      commandDragState = {
+        commandId: command.id,
+        pointerId: event.pointerId,
+        targetCommandId: null,
+        insertBefore: true
+      };
+      row.classList.add("is-dragging");
+      dragHandle.setPointerCapture(event.pointerId);
+      setCommandDragActive(true);
+      window.addEventListener("pointermove", handleWindowCommandDragMove, true);
+      window.addEventListener("pointerup", handleWindowCommandDragEnd, true);
+      window.addEventListener("pointercancel", handleWindowCommandDragCancel, true);
+      window.addEventListener("blur", handleWindowCommandDragCancel, true);
+    });
 
     const labelInput = createTextInput(command.label, text.placeholders.commandLabel);
     labelInput.addEventListener("input", () => {
       command.label = labelInput.value;
+      renderQuickCommands();
       renderShortcutEditor();
       updateSaveState();
     });
@@ -1488,6 +1535,7 @@ function renderCommandEditor(): void {
     const commandInput = createTextInput(command.command, text.placeholders.command);
     commandInput.addEventListener("input", () => {
       command.command = commandInput.value;
+      renderQuickCommands();
       updateSaveState();
     });
 
@@ -1530,11 +1578,160 @@ function renderCommandEditor(): void {
         })
         .catch((error) => {
           showSettingsStatus(error instanceof Error ? error.message : copy().errors.deleteCommand, true);
-        });
+      });
     });
 
-    row.append(labelInput, commandInput, runModeSelect, deleteButton);
+    row.append(dragHandle, labelInput, commandInput, runModeSelect, deleteButton);
     commandsEditorElement.append(row);
+  }
+}
+
+function reorderCommandById(sourceCommandId: string, targetCommandId: string, insertBefore: boolean): void {
+  if (!draftSettings || sourceCommandId === targetCommandId) {
+    return;
+  }
+
+  const currentCommands = draftSettings.commands;
+  const sourceIndex = currentCommands.findIndex((command) => command.id === sourceCommandId);
+  const targetIndex = currentCommands.findIndex((command) => command.id === targetCommandId);
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return;
+  }
+
+  const nextCommands = currentCommands.slice();
+  const [movedCommand] = nextCommands.splice(sourceIndex, 1);
+  if (!movedCommand) {
+    return;
+  }
+
+  const normalizedTargetIndex = targetIndex - (sourceIndex < targetIndex ? 1 : 0);
+  const insertIndex = insertBefore ? normalizedTargetIndex : normalizedTargetIndex + 1;
+  nextCommands.splice(Math.max(0, Math.min(nextCommands.length, insertIndex)), 0, movedCommand);
+  draftSettings.commands = nextCommands;
+  syncCommandEditorOrder();
+}
+
+function syncCommandEditorOrder(): void {
+  if (!draftSettings) {
+    return;
+  }
+
+  const rowById = new Map(
+    Array.from(commandsEditorElement.querySelectorAll<HTMLElement>(".command-editor-row")).map((row) => [
+      row.dataset.commandId ?? "",
+      row
+    ])
+  );
+
+  for (const command of draftSettings.commands) {
+    const row = rowById.get(command.id);
+    if (row) {
+      commandsEditorElement.append(row);
+    }
+  }
+
+  renderQuickCommands();
+  if (settingsTab === "shortcuts") {
+    renderShortcutEditor();
+  }
+  updateSaveState();
+}
+
+function updateCommandDragTarget(clientX: number, clientY: number): void {
+  if (!commandDragState) {
+    return;
+  }
+
+  const element = document.elementFromPoint(clientX, clientY);
+  const row = element?.closest<HTMLElement>(".command-editor-row") ?? null;
+  if (!row) {
+    setCommandDropTarget(null, true);
+    return;
+  }
+
+  const targetCommandId = row.dataset.commandId ?? "";
+  if (!targetCommandId || targetCommandId === commandDragState.commandId) {
+    setCommandDropTarget(null, true);
+    return;
+  }
+
+  const rect = row.getBoundingClientRect();
+  const insertBefore = clientY < rect.top + rect.height / 2;
+  setCommandDropTarget(targetCommandId, insertBefore);
+  reorderCommandById(commandDragState.commandId, targetCommandId, insertBefore);
+}
+
+function handleWindowCommandDragMove(event: PointerEvent): void {
+  if (!commandDragState || commandDragState.pointerId !== event.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  updateCommandDragTarget(event.clientX, event.clientY);
+}
+
+function handleWindowCommandDragEnd(event: PointerEvent): void {
+  if (!commandDragState || commandDragState.pointerId !== event.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  finishCommandDrag();
+}
+
+function handleWindowCommandDragCancel(event: Event): void {
+  if (!commandDragState) {
+    return;
+  }
+
+  if (event instanceof PointerEvent && event.pointerId !== commandDragState.pointerId) {
+    return;
+  }
+
+  clearCommandDragState();
+}
+
+function finishCommandDrag(): void {
+  if (!commandDragState) {
+    return;
+  }
+
+  clearCommandDragState();
+}
+
+function clearCommandDragState(): void {
+  window.removeEventListener("pointermove", handleWindowCommandDragMove, true);
+  window.removeEventListener("pointerup", handleWindowCommandDragEnd, true);
+  window.removeEventListener("pointercancel", handleWindowCommandDragCancel, true);
+  window.removeEventListener("blur", handleWindowCommandDragCancel, true);
+  commandDragState = null;
+  setCommandDragActive(false);
+  for (const row of commandsEditorElement.querySelectorAll<HTMLElement>(".command-editor-row")) {
+    row.classList.remove("is-dragging");
+    row.classList.remove("is-drop-before");
+    row.classList.remove("is-drop-after");
+  }
+}
+
+function setCommandDragActive(active: boolean): void {
+  commandsEditorElement.classList.toggle("is-dragging-commands", active);
+}
+
+function setCommandDropTarget(targetCommandId: string | null, insertBefore: boolean): void {
+  if (!commandDragState) {
+    return;
+  }
+
+  if (commandDragState.targetCommandId === targetCommandId && commandDragState.insertBefore === insertBefore) {
+    return;
+  }
+
+  commandDragState.targetCommandId = targetCommandId;
+  commandDragState.insertBefore = insertBefore;
+  for (const row of commandsEditorElement.querySelectorAll<HTMLElement>(".command-editor-row")) {
+    const rowCommandId = row.dataset.commandId ?? "";
+    row.classList.toggle("is-drop-before", targetCommandId !== null && rowCommandId === targetCommandId && insertBefore);
+    row.classList.toggle("is-drop-after", targetCommandId !== null && rowCommandId === targetCommandId && !insertBefore);
   }
 }
 
@@ -2117,6 +2314,10 @@ function handleTerminalKeyEvent(tabId: string, event: KeyboardEvent): boolean {
     (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "f") ||
     (appSettings?.features.autosuggestions.acceptWithTab === true && event.key === "Tab");
   if (shouldAcceptAll && isCursorAtTrackedLineEnd(tabId)) {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      event.stopPropagation();
+    }
     acceptSuggestion(tabId, "all");
     return false;
   }
@@ -2342,6 +2543,7 @@ function acceptSuggestion(tabId: string, mode: "all" | "partial"): void {
   window.terminalApi.writeTerminal({ id: tabId, data: accepted });
   state.suggestion = null;
   hideSuggestion(state);
+  tabs.get(tabId)?.terminal.focus();
 }
 
 function getPartialSuggestionSuffix(suffix: string): string {
