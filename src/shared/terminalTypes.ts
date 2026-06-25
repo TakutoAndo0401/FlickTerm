@@ -77,6 +77,7 @@ export type AppSettingsSnapshot = {
 export type CreateTerminalRequest = {
   id: string;
   title?: string;
+  cwd?: string;
   cols?: number;
   rows?: number;
 };

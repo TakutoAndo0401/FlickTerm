@@ -895,6 +895,7 @@ async function createTabFromSession(session: TerminalSessionTab): Promise<string
   const response = await window.terminalApi.createTerminal({
     id,
     title: session.title,
+    cwd: session.cwd,
     cols: session.cols,
     rows: session.rows
   });

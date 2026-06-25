@@ -85,7 +85,7 @@ impl PtyManager {
 
         let shell = resolve_shell();
         let title = normalize_title(request.title.as_deref(), &shell);
-        let cwd = dirs::home_dir();
+        let cwd = resolve_starting_cwd(request.cwd.as_deref());
         let tab = TerminalTab {
             id: request.id.clone(),
             title,
@@ -586,6 +586,28 @@ fn normalize_size(value: Option<u16>, default_value: u16, max_value: u16) -> u16
     value.unwrap_or(default_value).clamp(1, max_value)
 }
 
+fn resolve_starting_cwd(requested_cwd: Option<&str>) -> Option<PathBuf> {
+    requested_cwd
+        .and_then(resolve_requested_cwd)
+        .or_else(dirs::home_dir)
+}
+
+fn resolve_requested_cwd(requested_cwd: &str) -> Option<PathBuf> {
+    if requested_cwd.is_empty()
+        || requested_cwd.len() > MAX_SHELL_CWD_BYTES
+        || has_unsupported_control(requested_cwd)
+    {
+        return None;
+    }
+
+    let path = PathBuf::from(requested_cwd);
+    if path.is_absolute() && path.is_dir() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 fn resolve_shell() -> String {
     if cfg!(windows) {
         return env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".to_string());
@@ -702,6 +724,22 @@ mod tests {
             normalize_title(Some(&"a".repeat(100)), "/bin/zsh").len(),
             80
         );
+    }
+
+    #[test]
+    fn resolves_existing_absolute_requested_cwd() {
+        let cwd = env::temp_dir();
+        let cwd_text = cwd.to_string_lossy();
+
+        assert_eq!(resolve_requested_cwd(&cwd_text), Some(cwd));
+    }
+
+    #[test]
+    fn ignores_invalid_requested_cwd() {
+        assert!(resolve_requested_cwd("").is_none());
+        assert!(resolve_requested_cwd("relative/path").is_none());
+        assert!(resolve_requested_cwd("/definitely/missing/flickterm/cwd").is_none());
+        assert!(resolve_requested_cwd("/tmp/\ninvalid").is_none());
     }
 
     #[test]

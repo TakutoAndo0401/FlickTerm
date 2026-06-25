@@ -135,6 +135,7 @@ pub struct AppSettingsSnapshot {
 pub struct CreateTerminalRequest {
     pub id: String,
     pub title: Option<String>,
+    pub cwd: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
 }
