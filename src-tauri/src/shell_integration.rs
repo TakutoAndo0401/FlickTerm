@@ -41,19 +41,28 @@ _flickterm_preexec() {
   emulate -L zsh
   local command="$1"
   local cwd="$PWD"
+  local token="${FLICKTERM_SHELL_INTEGRATION_TOKEN:-}"
 
-  if [[ -z "$command" ]]; then
+  if [[ -z "$command" || -z "$token" ]]; then
     return 0
   fi
 
-  printf '\e]7777;FlickTermExecutedCommand;command=%s;cwd=%s\a' \
+  printf '\e]7777;FlickTermExecutedCommand;token=%s;command=%s;cwd=%s\a' \
+    "$(_flickterm_percent_encode "$token")" \
     "$(_flickterm_percent_encode "$command")" \
     "$(_flickterm_percent_encode "$cwd")"
 }
 
 _flickterm_precmd() {
   emulate -L zsh
-  printf '\e]7777;FlickTermShellIntegrationReady;cwd=%s\a' \
+  local token="${FLICKTERM_SHELL_INTEGRATION_TOKEN:-}"
+
+  if [[ -z "$token" ]]; then
+    return 0
+  fi
+
+  printf '\e]7777;FlickTermShellIntegrationReady;token=%s;cwd=%s\a' \
+    "$(_flickterm_percent_encode "$token")" \
     "$(_flickterm_percent_encode "$PWD")"
 }
 

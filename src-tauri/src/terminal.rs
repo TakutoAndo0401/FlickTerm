@@ -29,6 +29,8 @@ const MAX_TERMINAL_WRITE_BYTES: usize = 1024 * 1024;
 const MAX_OSC_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_SHELL_COMMAND_BYTES: usize = 8192;
 const MAX_SHELL_CWD_BYTES: usize = 4096;
+const SHELL_INTEGRATION_TOKEN_BYTES: usize = 32;
+const FLICKTERM_SHELL_INTEGRATION_TOKEN_ENV: &str = "FLICKTERM_SHELL_INTEGRATION_TOKEN";
 const FLICKTERM_OSC_PREFIX: &[u8] = b"7777;FlickTermExecutedCommand;";
 const FLICKTERM_READY_OSC_PREFIX: &[u8] = b"7777;FlickTermShellIntegrationReady;";
 
@@ -119,6 +121,12 @@ impl PtyManager {
             command.env("PATH", path);
         }
         command.env("TERM", "xterm-256color");
+        let shell_integration_token = generate_shell_integration_token()
+            .map_err(|error| PtyError::Spawn(error.to_string()))?;
+        command.env(
+            FLICKTERM_SHELL_INTEGRATION_TOKEN_ENV,
+            &shell_integration_token,
+        );
 
         let child = pair
             .slave
@@ -154,6 +162,7 @@ impl PtyManager {
             reader,
             settings,
             command_history,
+            shell_integration_token,
         );
         self.spawn_waiter(request.id, app, child);
 
@@ -241,10 +250,11 @@ impl PtyManager {
         mut reader: Box<dyn Read + Send>,
         settings: Arc<SettingsStore>,
         command_history: Arc<CommandHistoryStore>,
+        shell_integration_token: String,
     ) {
         thread::spawn(move || {
             let mut buffer = [0_u8; 8192];
-            let mut output_parser = TerminalOutputParser::default();
+            let mut output_parser = TerminalOutputParser::new(shell_integration_token);
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
@@ -317,9 +327,9 @@ impl PtyManager {
     }
 }
 
-#[derive(Default)]
 struct TerminalOutputParser {
     pending: Vec<u8>,
+    shell_integration_token: String,
 }
 
 struct ParsedTerminalOutput {
@@ -335,6 +345,13 @@ struct ShellExecutedCommand {
 }
 
 impl TerminalOutputParser {
+    fn new(shell_integration_token: String) -> Self {
+        Self {
+            pending: Vec::new(),
+            shell_integration_token,
+        }
+    }
+
     fn push(&mut self, data: &[u8]) -> ParsedTerminalOutput {
         self.pending.extend_from_slice(data);
 
@@ -364,7 +381,7 @@ impl TerminalOutputParser {
                     self.pending.drain(..start);
                 }
                 if self.pending.len() > MAX_OSC_BUFFER_BYTES {
-                    if !self.pending.starts_with(b"\x1b]7777;") {
+                    if !is_flickterm_private_osc_sequence(&self.pending) {
                         visible.extend_from_slice(&self.pending);
                     }
                     self.pending.clear();
@@ -380,11 +397,16 @@ impl TerminalOutputParser {
             let sequence_end = content_end + terminator_len;
             let content = &self.pending[content_start..content_end];
             if content.starts_with(FLICKTERM_OSC_PREFIX) {
-                if let Some(command) = parse_flickterm_command(content) {
+                if let Some(command) =
+                    parse_flickterm_command(content, &self.shell_integration_token)
+                {
                     commands.push(command);
                 }
             } else if content.starts_with(FLICKTERM_READY_OSC_PREFIX) {
-                shell_integration_cwd = parse_flickterm_ready_cwd(content);
+                if let Some(cwd) = parse_flickterm_ready_cwd(content, &self.shell_integration_token)
+                {
+                    shell_integration_cwd = Some(cwd);
+                }
             } else {
                 visible.extend_from_slice(&self.pending[start..sequence_end]);
             }
@@ -467,9 +489,17 @@ fn record_shell_command(
     }
 }
 
-fn parse_flickterm_command(content: &[u8]) -> Option<ShellExecutedCommand> {
+fn parse_flickterm_command(
+    content: &[u8],
+    shell_integration_token: &str,
+) -> Option<ShellExecutedCommand> {
+    if shell_integration_token.is_empty() {
+        return None;
+    }
+
     let payload = content.strip_prefix(FLICKTERM_OSC_PREFIX)?;
     let payload = std::str::from_utf8(payload).ok()?;
+    let mut token = None;
     let mut command = None;
     let mut cwd = None;
 
@@ -478,29 +508,46 @@ fn parse_flickterm_command(content: &[u8]) -> Option<ShellExecutedCommand> {
             continue;
         };
         match key {
+            "token" => token = percent_decode(value),
             "command" => command = percent_decode(value),
             "cwd" => cwd = percent_decode(value),
             _ => {}
         }
     }
 
+    if token.as_deref() != Some(shell_integration_token) {
+        return None;
+    }
+
     command.map(|command| ShellExecutedCommand { command, cwd })
 }
 
-fn parse_flickterm_ready_cwd(content: &[u8]) -> Option<String> {
+fn parse_flickterm_ready_cwd(content: &[u8], shell_integration_token: &str) -> Option<String> {
+    if shell_integration_token.is_empty() {
+        return None;
+    }
+
     let payload = content.strip_prefix(FLICKTERM_READY_OSC_PREFIX)?;
     let payload = std::str::from_utf8(payload).ok()?;
+    let mut token = None;
+    let mut cwd = None;
 
     for part in payload.split(';') {
         let Some((key, value)) = part.split_once('=') else {
             continue;
         };
-        if key == "cwd" {
-            return percent_decode(value);
+        match key {
+            "token" => token = percent_decode(value),
+            "cwd" => cwd = percent_decode(value),
+            _ => {}
         }
     }
 
-    None
+    if token.as_deref() == Some(shell_integration_token) {
+        cwd
+    } else {
+        None
+    }
 }
 
 fn percent_decode(value: &str) -> Option<String> {
@@ -535,6 +582,24 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
+fn generate_shell_integration_token() -> Result<String, getrandom::Error> {
+    let mut bytes = [0_u8; SHELL_INTEGRATION_TOKEN_BYTES];
+    getrandom::fill(&mut bytes)?;
+    Ok(hex_encode(&bytes))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+
+    encoded
+}
+
 fn has_unsupported_control(value: &str) -> bool {
     value
         .chars()
@@ -558,6 +623,12 @@ fn find_osc_terminator(data: &[u8]) -> Option<(usize, usize)> {
         (None, Some(st)) => Some((st, 2)),
         (None, None) => None,
     }
+}
+
+fn is_flickterm_private_osc_sequence(data: &[u8]) -> bool {
+    data.strip_prefix(b"\x1b]").is_some_and(|content| {
+        content.starts_with(FLICKTERM_OSC_PREFIX) || content.starts_with(FLICKTERM_READY_OSC_PREFIX)
+    })
 }
 
 fn validate_terminal_id(id: &str) -> Result<(), PtyError> {
@@ -685,6 +756,12 @@ fn append_missing_path_entries(current: &str, supplemental_entries: &[String]) -
 mod tests {
     use super::*;
 
+    const TEST_SHELL_INTEGRATION_TOKEN: &str = "test-token";
+
+    fn test_parser() -> TerminalOutputParser {
+        TerminalOutputParser::new(TEST_SHELL_INTEGRATION_TOKEN.to_string())
+    }
+
     #[test]
     fn starts_known_unix_shells_as_login_shells() {
         assert!(should_start_as_login_shell("/bin/zsh"));
@@ -757,9 +834,9 @@ mod tests {
 
     #[test]
     fn extracts_flickterm_command_osc_and_keeps_visible_output() {
-        let mut parser = TerminalOutputParser::default();
+        let mut parser = test_parser();
         let output = parser.push(
-            b"before\x1b]7777;FlickTermExecutedCommand;command=git%20status;cwd=/tmp\x07after",
+            b"before\x1b]7777;FlickTermExecutedCommand;token=test-token;command=git%20status;cwd=/tmp\x07after",
         );
 
         assert_eq!(output.data, b"beforeafter");
@@ -774,7 +851,7 @@ mod tests {
 
     #[test]
     fn passes_non_flickterm_osc_through() {
-        let mut parser = TerminalOutputParser::default();
+        let mut parser = test_parser();
         let output = parser.push(b"\x1b]0;title\x07prompt");
 
         assert_eq!(output.data, b"\x1b]0;title\x07prompt");
@@ -783,8 +860,9 @@ mod tests {
 
     #[test]
     fn supports_split_flickterm_osc() {
-        let mut parser = TerminalOutputParser::default();
-        let first = parser.push(b"before\x1b]7777;FlickTermExecutedCommand;command=git");
+        let mut parser = test_parser();
+        let first =
+            parser.push(b"before\x1b]7777;FlickTermExecutedCommand;token=test-token;command=git");
         let second = parser.push(b"%20status;cwd=/tmp\x07after");
 
         assert_eq!(first.data, b"before");
@@ -800,9 +878,10 @@ mod tests {
     }
 
     #[test]
-    fn drops_malformed_flickterm_osc() {
-        let mut parser = TerminalOutputParser::default();
-        let output = parser.push(b"a\x1b]7777;FlickTermExecutedCommand;command=%QQ\x07b");
+    fn drops_malformed_private_osc() {
+        let mut parser = test_parser();
+        let output =
+            parser.push(b"a\x1b]7777;FlickTermExecutedCommand;token=test-token;command=%QQ\x07b");
 
         assert_eq!(output.data, b"ab");
         assert!(output.commands.is_empty());
@@ -810,11 +889,80 @@ mod tests {
 
     #[test]
     fn detects_shell_integration_ready_osc() {
-        let mut parser = TerminalOutputParser::default();
-        let output = parser.push(b"\x1b]7777;FlickTermShellIntegrationReady;cwd=/tmp\x07prompt");
+        let mut parser = test_parser();
+        let output = parser
+            .push(b"\x1b]7777;FlickTermShellIntegrationReady;token=test-token;cwd=/tmp\x07prompt");
 
         assert_eq!(output.data, b"prompt");
         assert!(output.commands.is_empty());
         assert_eq!(output.shell_integration_cwd, Some("/tmp".to_string()));
+    }
+
+    #[test]
+    fn rejects_private_command_osc_without_matching_token() {
+        let mut parser = test_parser();
+        let forged = b"\x1b]7777;FlickTermExecutedCommand;command=git%20status;cwd=/tmp\x07prompt";
+        let output = parser.push(forged);
+
+        assert_eq!(output.data, b"prompt");
+        assert!(output.commands.is_empty());
+        assert!(output.shell_integration_cwd.is_none());
+    }
+
+    #[test]
+    fn rejects_private_command_osc_with_wrong_token() {
+        let mut parser = test_parser();
+        let forged =
+            b"\x1b]7777;FlickTermExecutedCommand;token=wrong;command=git%20status;cwd=/tmp\x07prompt";
+        let output = parser.push(forged);
+
+        assert_eq!(output.data, b"prompt");
+        assert!(output.commands.is_empty());
+        assert!(output.shell_integration_cwd.is_none());
+    }
+
+    #[test]
+    fn rejects_private_ready_osc_without_matching_token() {
+        let mut parser = test_parser();
+        let forged = b"\x1b]7777;FlickTermShellIntegrationReady;cwd=/tmp\x07prompt";
+        let output = parser.push(forged);
+
+        assert_eq!(output.data, b"prompt");
+        assert!(output.commands.is_empty());
+        assert!(output.shell_integration_cwd.is_none());
+    }
+
+    #[test]
+    fn rejects_private_ready_osc_with_wrong_token() {
+        let mut parser = test_parser();
+        let forged = b"\x1b]7777;FlickTermShellIntegrationReady;token=wrong;cwd=/tmp\x07prompt";
+        let output = parser.push(forged);
+
+        assert_eq!(output.data, b"prompt");
+        assert!(output.commands.is_empty());
+        assert!(output.shell_integration_cwd.is_none());
+    }
+
+    #[test]
+    fn drops_oversized_unterminated_private_osc() {
+        let mut parser = test_parser();
+        let mut data = b"before\x1b]7777;FlickTermExecutedCommand;token=wrong;command=".to_vec();
+        data.extend(std::iter::repeat_n(b'a', MAX_OSC_BUFFER_BYTES));
+
+        let output = parser.push(&data);
+        assert_eq!(output.data, b"before");
+        assert!(output.commands.is_empty());
+
+        let next = parser.push(b"after");
+        assert_eq!(next.data, b"after");
+        assert!(next.commands.is_empty());
+    }
+
+    #[test]
+    fn generates_hex_shell_integration_token() {
+        let token = generate_shell_integration_token().expect("token should be generated");
+
+        assert_eq!(token.len(), SHELL_INTEGRATION_TOKEN_BYTES * 2);
+        assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
 }
