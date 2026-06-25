@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="FlickTerm app icon">
+  <rect x="48" y="48" width="416" height="416" rx="96" fill="#101417"/>
+  <rect x="58" y="58" width="396" height="396" rx="86" fill="none" stroke="#2a3438" stroke-width="20"/>
+  <path
+    d="M170 188L248 256L170 324"
+    fill="none"
+    stroke="#79f2c0"
+    stroke-width="44"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <rect x="300" y="176" width="46" height="160" rx="23" fill="#eef5f4"/>
+</svg>
