@@ -168,6 +168,30 @@ pub struct TerminalKillRequest {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CompletionRequest {
+    pub cwd: Option<String>,
+    pub token: String,
+    pub directories_only: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompletionKind {
+    File,
+    Directory,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionItem {
+    pub name: String,
+    pub display: String,
+    pub insert_text: String,
+    pub kind: CompletionKind,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalDataEvent {
     pub id: String,
     pub data: Vec<u8>,
@@ -206,6 +230,7 @@ pub struct CommandHistoryRecordRequest {
 pub struct ShellIntegrationStatusEvent {
     pub id: String,
     pub detected: bool,
+    pub cwd: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -250,12 +250,13 @@ impl PtyManager {
                     Ok(0) => break,
                     Ok(size) => {
                         let parsed = output_parser.push(&buffer[..size]);
-                        if parsed.shell_integration_detected {
+                        if let Some(cwd) = parsed.shell_integration_cwd {
                             let _ = app.emit(
                                 "shell-integration:status",
                                 ShellIntegrationStatusEvent {
                                     id: id.clone(),
                                     detected: true,
+                                    cwd: Some(cwd),
                                 },
                             );
                         }
@@ -324,7 +325,7 @@ struct TerminalOutputParser {
 struct ParsedTerminalOutput {
     data: Vec<u8>,
     commands: Vec<ShellExecutedCommand>,
-    shell_integration_detected: bool,
+    shell_integration_cwd: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -339,7 +340,7 @@ impl TerminalOutputParser {
 
         let mut visible = Vec::new();
         let mut commands = Vec::new();
-        let mut shell_integration_detected = false;
+        let mut shell_integration_cwd = None;
         let mut index = 0;
 
         while index < self.pending.len() {
@@ -349,7 +350,7 @@ impl TerminalOutputParser {
                 return ParsedTerminalOutput {
                     data: visible,
                     commands,
-                    shell_integration_detected,
+                    shell_integration_cwd,
                 };
             };
             let start = index + start_offset;
@@ -371,7 +372,7 @@ impl TerminalOutputParser {
                 return ParsedTerminalOutput {
                     data: visible,
                     commands,
-                    shell_integration_detected,
+                    shell_integration_cwd,
                 };
             };
 
@@ -383,7 +384,7 @@ impl TerminalOutputParser {
                     commands.push(command);
                 }
             } else if content.starts_with(FLICKTERM_READY_OSC_PREFIX) {
-                shell_integration_detected = true;
+                shell_integration_cwd = parse_flickterm_ready_cwd(content);
             } else {
                 visible.extend_from_slice(&self.pending[start..sequence_end]);
             }
@@ -395,7 +396,7 @@ impl TerminalOutputParser {
         ParsedTerminalOutput {
             data: visible,
             commands,
-            shell_integration_detected,
+            shell_integration_cwd,
         }
     }
 }
@@ -444,7 +445,7 @@ fn record_shell_command(
 
     let result = command_history.record(CommandHistoryRecordRequest {
         command: command_text,
-        cwd,
+        cwd: cwd.clone(),
         max_entries: settings.features.command_history.max_entries,
     });
 
@@ -456,6 +457,7 @@ fn record_shell_command(
                 ShellIntegrationStatusEvent {
                     id: id.to_string(),
                     detected: true,
+                    cwd,
                 },
             );
         }
@@ -483,6 +485,22 @@ fn parse_flickterm_command(content: &[u8]) -> Option<ShellExecutedCommand> {
     }
 
     command.map(|command| ShellExecutedCommand { command, cwd })
+}
+
+fn parse_flickterm_ready_cwd(content: &[u8]) -> Option<String> {
+    let payload = content.strip_prefix(FLICKTERM_READY_OSC_PREFIX)?;
+    let payload = std::str::from_utf8(payload).ok()?;
+
+    for part in payload.split(';') {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        if key == "cwd" {
+            return percent_decode(value);
+        }
+    }
+
+    None
 }
 
 fn percent_decode(value: &str) -> Option<String> {
@@ -759,6 +777,6 @@ mod tests {
 
         assert_eq!(output.data, b"prompt");
         assert!(output.commands.is_empty());
-        assert!(output.shell_integration_detected);
+        assert_eq!(output.shell_integration_cwd, Some("/tmp".to_string()));
     }
 }

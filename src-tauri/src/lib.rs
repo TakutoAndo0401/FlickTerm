@@ -7,15 +7,23 @@ mod types;
 
 use command_history::CommandHistoryStore;
 use settings::SettingsStore;
-use std::sync::Arc;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tauri::{Manager, State};
 use terminal::PtyManager;
 use terminal_sessions::TerminalSessionsStore;
 use types::{
     AppSettings, AppSettingsSnapshot, CommandHistoryEntry, CommandHistoryRecordRequest,
-    CreateTerminalRequest, CreateTerminalResponse, QuickCommand, TerminalKillRequest,
-    TerminalResizeRequest, TerminalSessionsSnapshot, TerminalWriteRequest,
+    CompletionItem, CompletionKind, CompletionRequest, CreateTerminalRequest,
+    CreateTerminalResponse, QuickCommand, TerminalKillRequest, TerminalResizeRequest,
+    TerminalSessionsSnapshot, TerminalWriteRequest,
 };
+
+const MAX_COMPLETION_TOKEN_LEN: usize = 512;
+const MAX_COMPLETION_RESULTS: usize = 80;
 
 struct AppState {
     settings: Arc<SettingsStore>,
@@ -120,6 +128,151 @@ fn shell_integration_install_zshrc(app: tauri::AppHandle) -> Result<String, Stri
 }
 
 #[tauri::command]
+fn completions_list(request: CompletionRequest) -> Result<Vec<CompletionItem>, String> {
+    if request.token.len() > MAX_COMPLETION_TOKEN_LEN {
+        return Ok(Vec::new());
+    }
+
+    let cwd = request
+        .cwd
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .or_else(dirs::home_dir)
+        .ok_or_else(|| "Home directory was not found.".to_string())?;
+    let (directory, prefix) = resolve_completion_directory(&cwd, &request.token)?;
+    let entries = fs::read_dir(&directory).map_err(|error| error.to_string())?;
+    let show_hidden = prefix.starts_with('.');
+    let mut items = Vec::new();
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == "."
+            || name == ".."
+            || (!show_hidden && name.starts_with('.'))
+            || !name.starts_with(&prefix)
+        {
+            continue;
+        }
+
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        let is_dir = file_type.is_dir();
+        if request.directories_only && !is_dir {
+            continue;
+        }
+
+        let suffix = if is_dir { "/" } else { "" };
+        items.push(CompletionItem {
+            insert_text: format!("{}{}", shell_escape_path_component(&name), suffix),
+            display: format!("{name}{suffix}"),
+            name,
+            kind: if is_dir {
+                CompletionKind::Directory
+            } else {
+                CompletionKind::File
+            },
+        });
+    }
+
+    items.sort_by(|left, right| match (&left.kind, &right.kind) {
+        (CompletionKind::Directory, CompletionKind::File) => std::cmp::Ordering::Less,
+        (CompletionKind::File, CompletionKind::Directory) => std::cmp::Ordering::Greater,
+        _ => left
+            .name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.name.cmp(&right.name)),
+    });
+    items.truncate(MAX_COMPLETION_RESULTS);
+    Ok(items)
+}
+
+fn resolve_completion_directory(cwd: &Path, token: &str) -> Result<(PathBuf, String), String> {
+    let unescaped = unescape_shell_token(token);
+    let (directory_part, prefix) = match unescaped.rsplit_once('/') {
+        Some((directory, prefix)) => (directory, prefix.to_string()),
+        None => ("", unescaped),
+    };
+
+    let directory = if directory_part.is_empty() {
+        cwd.to_path_buf()
+    } else if directory_part == "~" {
+        dirs::home_dir().ok_or_else(|| "Home directory was not found.".to_string())?
+    } else if let Some(rest) = directory_part.strip_prefix("~/") {
+        dirs::home_dir()
+            .ok_or_else(|| "Home directory was not found.".to_string())?
+            .join(rest)
+    } else {
+        let path = PathBuf::from(directory_part);
+        if path.is_absolute() {
+            path
+        } else {
+            cwd.join(path)
+        }
+    };
+
+    Ok((directory, prefix))
+}
+
+fn unescape_shell_token(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut escaped = false;
+    for char in value.chars() {
+        if escaped {
+            output.push(char);
+            escaped = false;
+        } else if char == '\\' {
+            escaped = true;
+        } else {
+            output.push(char);
+        }
+    }
+    if escaped {
+        output.push('\\');
+    }
+    output
+}
+
+fn shell_escape_path_component(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for char in value.chars() {
+        if matches!(
+            char,
+            ' ' | '\t'
+                | '\''
+                | '"'
+                | '\\'
+                | '$'
+                | '&'
+                | ';'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '|'
+                | '<'
+                | '>'
+                | '*'
+                | '?'
+                | '!'
+        ) {
+            output.push('\\');
+        }
+        output.push(char);
+    }
+    output
+}
+
+#[tauri::command]
 fn terminal_create(
     request: CreateTerminalRequest,
     app: tauri::AppHandle,
@@ -216,6 +369,7 @@ pub fn run() {
             terminal_sessions_clear,
             shell_integration_zshrc_snippet,
             shell_integration_install_zshrc,
+            completions_list,
             terminal_create,
             terminal_write,
             terminal_resize,

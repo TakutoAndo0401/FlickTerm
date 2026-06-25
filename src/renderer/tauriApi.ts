@@ -8,6 +8,8 @@ import type {
   AppSettingsSnapshot,
   CommandHistoryEntry,
   CommandHistoryRecordRequest,
+  CompletionItem,
+  CompletionRequest,
   CreateTerminalRequest,
   CreateTerminalResponse,
   QuickCommand,
@@ -73,6 +75,8 @@ const terminalApi: TerminalApi = {
     await relaunch();
     return result;
   },
+
+  listCompletions: (request: CompletionRequest) => invoke<CompletionItem[]>("completions_list", { request }),
 
   createTerminal: (request: CreateTerminalRequest) =>
     invoke<CreateTerminalResponse>("terminal_create", { request }),

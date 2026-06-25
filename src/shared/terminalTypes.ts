@@ -100,6 +100,21 @@ export type TerminalKillRequest = {
   id: string;
 };
 
+export type CompletionKind = "file" | "directory";
+
+export type CompletionRequest = {
+  cwd?: string;
+  token: string;
+  directoriesOnly: boolean;
+};
+
+export type CompletionItem = {
+  name: string;
+  display: string;
+  insertText: string;
+  kind: CompletionKind;
+};
+
 export type TerminalDataEvent = {
   id: string;
   data: number[];
@@ -130,6 +145,7 @@ export type CommandHistoryRecordRequest = {
 export type ShellIntegrationStatusEvent = {
   id: string;
   detected: boolean;
+  cwd?: string;
 };
 
 export type TerminalSessionTab = {
@@ -168,6 +184,7 @@ export type TerminalApi = {
   getShellIntegrationZshrcSnippet: () => Promise<string>;
   installShellIntegrationZshrc: () => Promise<string>;
   installUpdateIfAvailable: () => Promise<UpdateInstallResult>;
+  listCompletions: (request: CompletionRequest) => Promise<CompletionItem[]>;
   createTerminal: (request: CreateTerminalRequest) => Promise<CreateTerminalResponse>;
   writeTerminal: (request: TerminalWriteRequest) => void;
   resizeTerminal: (request: TerminalResizeRequest) => void;

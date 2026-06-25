@@ -301,6 +301,120 @@ button {
   display: block;
 }
 
+.input-selection-overlay {
+  position: absolute;
+  z-index: 2;
+  display: none;
+  border-radius: 2px;
+  background: rgb(63 140 255 / 42%);
+  pointer-events: none;
+}
+
+.input-selection-overlay.is-visible {
+  display: block;
+}
+
+.completion-panel {
+  position: absolute;
+  z-index: 7;
+  display: none;
+  max-width: calc(100% - 16px);
+  color: #d6d8dc;
+  font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+  font-size: 12px;
+  pointer-events: auto;
+}
+
+.completion-panel.is-open {
+  display: block;
+}
+
+.completion-results,
+.completion-detail {
+  overflow: hidden;
+  border: 1px solid #343941;
+  border-radius: 6px;
+  background: rgb(32 36 42 / 96%);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 36%);
+}
+
+.completion-results {
+  display: grid;
+  max-height: 224px;
+  padding: 4px;
+}
+
+.completion-result {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  color: #d6d8dc;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+
+.completion-result.is-selected,
+.completion-result:hover {
+  color: #17191d;
+  background: #ef69bd;
+}
+
+.completion-icon {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  color: #f4f6f8;
+  background: rgb(17 19 21 / 42%);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.completion-name,
+.completion-kind {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.completion-kind {
+  color: #aeb5bf;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.completion-result.is-selected .completion-kind,
+.completion-result:hover .completion-kind {
+  color: #724064;
+}
+
+.completion-detail {
+  display: none;
+}
+
+.completion-detail-title {
+  overflow: hidden;
+  color: #f0f3f6;
+  font-size: 18px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.completion-detail-subtitle {
+  margin-top: 12px;
+  color: #b6bcc6;
+  font-size: 14px;
+}
+
 .terminal-search-panel {
   position: absolute;
   top: 12px;

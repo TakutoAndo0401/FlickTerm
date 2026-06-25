@@ -8,6 +8,7 @@ import type {
   AppSettings,
   AppSettingsSnapshot,
   CommandHistoryEntry,
+  CompletionItem,
   CursorStyle,
   FeatureSettings,
   QuickCommand,
@@ -40,9 +41,16 @@ type ValidationResult = {
 type TerminalInputState = {
   line: string;
   cursor: number;
+  selectionAnchor: number | null;
+  inputReliable: boolean;
   dismissedSuggestionFor: string;
   suggestion: CommandHistoryEntry | null;
   suggestionOverlay: HTMLDivElement;
+  selectionOverlay: HTMLDivElement;
+  completionPanel: HTMLDivElement;
+  completionResults: HTMLDivElement;
+  completionDetail: HTMLDivElement;
+  completion: CompletionPopupState | null;
   historyPanel: HTMLDivElement;
   historyInput: HTMLInputElement;
   historyResults: HTMLDivElement;
@@ -52,6 +60,24 @@ type TerminalInputState = {
   searchQuery: string;
   searchResultCount: number;
   searchResultIndex: number;
+};
+
+type CompletionPopupState = {
+  tokenStart: number;
+  tokenEnd: number;
+  tokenDirectoryPrefix: string;
+  directoriesOnly: boolean;
+  selectedIndex: number;
+  interactionMode: "keyboard" | "mouse";
+  items: CompletionItem[];
+};
+
+type CompletionTarget = {
+  token: string;
+  tokenDirectoryPrefix: string;
+  tokenStart: number;
+  tokenEnd: number;
+  directoriesOnly: boolean;
 };
 
 const tabsElement = getElement("tabs");
@@ -385,6 +411,7 @@ const commandPanelWidthMin = 120;
 const commandPanelWidthMax = 360;
 const commandPanelKeyboardStep = 10;
 const historySearchResultLimit = 8;
+const completionResultLimit = 8;
 const sessionSerializeScrollback = 1000;
 const sessionSaveDebounceMs = 2000;
 const closedTabsLimit = 10;
@@ -470,6 +497,7 @@ window.terminalApi.onTerminalData(({ id, data }) => {
 
   view.terminal.write(chunk, () => {
     scheduleSuggestionUpdate(id);
+    scheduleLineSelectionUpdate(id);
     markSessionsDirty();
   });
 });
@@ -479,11 +507,17 @@ window.terminalApi.onCommandHistoryUpdated((entries) => {
   updateActiveSuggestion();
 });
 
-window.terminalApi.onShellIntegrationStatus(({ id, detected }) => {
+window.terminalApi.onShellIntegrationStatus(({ id, detected, cwd }) => {
   if (detected) {
     shellIntegrationDetectedTabs.add(id);
   } else {
     shellIntegrationDetectedTabs.delete(id);
+  }
+  const view = tabs.get(id);
+  if (view && cwd) {
+    view.metadata.cwd = cwd;
+    markSessionsDirty();
+    updateSuggestion(id);
   }
   if (settingsTab === "features" && isSettingsOpen()) {
     renderFeaturesEditor();
@@ -1275,9 +1309,21 @@ async function runCommand(command: QuickCommand): Promise<void> {
     if (state) {
       state.line = "";
       state.cursor = 0;
+      state.selectionAnchor = null;
+      state.inputReliable = true;
       state.dismissedSuggestionFor = "";
       state.suggestion = null;
       hideSuggestion(state);
+      hideLineSelection(state);
+      closeCompletion(activeTabId);
+    }
+  } else {
+    const state = inputStates.get(activeTabId);
+    if (state && isInputAssistanceAvailable(activeTabId)) {
+      const start = hasLineSelection(state) ? getSelectionStart(state) : state.cursor;
+      const end = hasLineSelection(state) ? getSelectionEnd(state) : state.cursor;
+      replaceCurrentLineRange(activeTabId, start, end, command.command);
+      return;
     }
   }
 
@@ -2197,6 +2243,16 @@ function createAppearanceRow(labelText: string, hintText: string, control: HTMLE
 function createTerminalInputState(view: RendererTerminalTab): TerminalInputState {
   const suggestionOverlay = document.createElement("div");
   suggestionOverlay.className = "suggestion-overlay";
+  const selectionOverlay = document.createElement("div");
+  selectionOverlay.className = "input-selection-overlay";
+
+  const completionPanel = document.createElement("div");
+  completionPanel.className = "completion-panel";
+  const completionResults = document.createElement("div");
+  completionResults.className = "completion-results";
+  const completionDetail = document.createElement("div");
+  completionDetail.className = "completion-detail";
+  completionPanel.append(completionResults, completionDetail);
 
   const searchPanel = document.createElement("div");
   searchPanel.className = "terminal-search-panel";
@@ -2229,7 +2285,7 @@ function createTerminalInputState(view: RendererTerminalTab): TerminalInputState
   const historyResults = document.createElement("div");
   historyResults.className = "history-search-results";
   historyPanel.append(historyInput, historyResults);
-  view.element.append(suggestionOverlay, searchPanel, historyPanel);
+  view.element.append(selectionOverlay, suggestionOverlay, completionPanel, searchPanel, historyPanel);
 
   searchInput.addEventListener("input", () => {
     runTerminalSearch(view.metadata.id, "next", true);
@@ -2261,9 +2317,16 @@ function createTerminalInputState(view: RendererTerminalTab): TerminalInputState
   return {
     line: "",
     cursor: 0,
+    selectionAnchor: null,
+    inputReliable: true,
     dismissedSuggestionFor: "",
     suggestion: null,
     suggestionOverlay,
+    selectionOverlay,
+    completionPanel,
+    completionResults,
+    completionDetail,
+    completion: null,
     searchPanel,
     searchInput,
     searchStatus,
@@ -2294,13 +2357,25 @@ function handleTerminalKeyEvent(tabId: string, event: KeyboardEvent): boolean {
     return true;
   }
 
+  if (state.completion) {
+    if (handleCompletionKeyEvent(tabId, event)) {
+      return false;
+    }
+  }
+
   if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "r") {
     openHistorySearch(tabId);
     return false;
   }
 
+  if (handleLineEditingKeyEvent(tabId, event)) {
+    return false;
+  }
+
   if (event.key === "Escape") {
     state.dismissedSuggestionFor = state.line;
+    clearLineSelection(tabId);
+    closeCompletion(tabId);
     updateSuggestion(tabId);
     return true;
   }
@@ -2311,8 +2386,7 @@ function handleTerminalKeyEvent(tabId: string, event: KeyboardEvent): boolean {
 
   const shouldAcceptAll =
     (event.key === "ArrowRight" && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) ||
-    (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "f") ||
-    (appSettings?.features.autosuggestions.acceptWithTab === true && event.key === "Tab");
+    (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "f");
   if (shouldAcceptAll && isCursorAtTrackedLineEnd(tabId)) {
     if (event.key === "Tab") {
       event.preventDefault();
@@ -2330,6 +2404,128 @@ function handleTerminalKeyEvent(tabId: string, event: KeyboardEvent): boolean {
   return true;
 }
 
+function handleCompletionKeyEvent(tabId: string, event: KeyboardEvent): boolean {
+  const state = inputStates.get(tabId);
+  if (!state?.completion) {
+    return false;
+  }
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeCompletion(tabId);
+    tabs.get(tabId)?.terminal.focus();
+    return true;
+  }
+
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    selectCompletionItem(tabId, state.completion.selectedIndex + 1, "keyboard");
+    return true;
+  }
+
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    selectCompletionItem(tabId, state.completion.selectedIndex - 1, "keyboard");
+    return true;
+  }
+
+  if (event.key === "Tab") {
+    event.preventDefault();
+    selectCompletionItem(tabId, state.completion.selectedIndex + (event.shiftKey ? -1 : 1), "keyboard");
+    return true;
+  }
+
+  if (event.key === "Enter") {
+    event.preventDefault();
+    acceptCompletion(tabId);
+    return true;
+  }
+
+  return false;
+}
+
+function handleLineEditingKeyEvent(tabId: string, event: KeyboardEvent): boolean {
+  const state = inputStates.get(tabId);
+  if (!state || !isInputAssistanceAvailable(tabId)) {
+    return false;
+  }
+
+  const key = event.key;
+  if (event.metaKey && !event.ctrlKey && !event.altKey && key.toLowerCase() === "a") {
+    event.preventDefault();
+    const previousCursor = state.cursor;
+    state.selectionAnchor = 0;
+    state.cursor = state.line.length;
+    state.dismissedSuggestionFor = state.line;
+    state.suggestion = null;
+    hideSuggestion(state);
+    closeCompletion(tabId);
+    const data = cursorMovementData(previousCursor, state.cursor);
+    if (data.length > 0) {
+      window.terminalApi.writeTerminal({ id: tabId, data });
+    }
+    scheduleLineSelectionUpdate(tabId);
+    return true;
+  }
+
+  if (event.metaKey && !event.ctrlKey && !event.altKey && key.toLowerCase() === "c") {
+    if (hasLineSelection(state)) {
+      event.preventDefault();
+      copyLineSelection(state).catch((error) => {
+        console.warn("Failed to copy current line selection", error);
+      });
+      return true;
+    }
+    return false;
+  }
+
+  if (event.metaKey && !event.ctrlKey && !event.altKey && key.toLowerCase() === "v") {
+    event.preventDefault();
+    pasteIntoCurrentLine(tabId).catch((error) => {
+      console.warn("Failed to paste into current line", error);
+    });
+    return true;
+  }
+
+  if (key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    event.preventDefault();
+    openCompletion(tabId).catch((error) => {
+      console.warn("Failed to load completions", error);
+    });
+    return true;
+  }
+
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    const nextCursor = getHorizontalNavigationCursor(state, key === "ArrowLeft" ? -1 : 1, event);
+    if (nextCursor !== state.cursor || event.shiftKey || hasLineSelection(state)) {
+      event.preventDefault();
+      moveCurrentLineCursor(tabId, nextCursor, event.shiftKey);
+      return true;
+    }
+  }
+
+  if (key === "Backspace" && hasLineSelection(state)) {
+    event.preventDefault();
+    replaceCurrentLineRange(tabId, getSelectionStart(state), getSelectionEnd(state), "");
+    return true;
+  }
+
+  if (key === "Delete") {
+    if (hasLineSelection(state)) {
+      event.preventDefault();
+      replaceCurrentLineRange(tabId, getSelectionStart(state), getSelectionEnd(state), "");
+      return true;
+    }
+    if (state.cursor < state.line.length) {
+      event.preventDefault();
+      replaceCurrentLineRange(tabId, state.cursor, state.cursor + 1, "");
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function handleTerminalInputData(tabId: string, data: string): boolean {
   const state = inputStates.get(tabId);
   const view = tabs.get(tabId);
@@ -2340,9 +2536,13 @@ function handleTerminalInputData(tabId: string, data: string): boolean {
   if (isTabInAlternateBuffer(tabId)) {
     state.line = "";
     state.cursor = 0;
+    state.selectionAnchor = null;
+    state.inputReliable = true;
     state.dismissedSuggestionFor = "";
     state.suggestion = null;
     hideSuggestion(state);
+    hideLineSelection(state);
+    closeCompletion(tabId);
     return false;
   }
 
@@ -2356,13 +2556,24 @@ function handleTerminalInputData(tabId: string, data: string): boolean {
     return true;
   }
 
+  if (data === "\t" && isInputAssistanceAvailable(tabId)) {
+    openCompletion(tabId).catch((error) => {
+      console.warn("Failed to load completions", error);
+    });
+    return true;
+  }
+
   if (data === "\r") {
     const command = state.line;
     state.line = "";
     state.cursor = 0;
+    state.selectionAnchor = null;
+    state.inputReliable = true;
     state.dismissedSuggestionFor = "";
     state.suggestion = null;
     hideSuggestion(state);
+    hideLineSelection(state);
+    closeCompletion(tabId);
     recordCommandIfEligible(tabId, command).catch((error) => {
       console.warn("Failed to record command history", error);
     });
@@ -2370,51 +2581,445 @@ function handleTerminalInputData(tabId: string, data: string): boolean {
   }
 
   if (data === "\x7f") {
+    if (hasLineSelection(state)) {
+      replaceCurrentLineRange(tabId, getSelectionStart(state), getSelectionEnd(state), "");
+      return true;
+    }
+    state.inputReliable = true;
     if (state.cursor > 0) {
       state.line = `${state.line.slice(0, state.cursor - 1)}${state.line.slice(state.cursor)}`;
       state.cursor -= 1;
     }
+    state.selectionAnchor = null;
     state.dismissedSuggestionFor = "";
     state.suggestion = null;
     hideSuggestion(state);
+    hideLineSelection(state);
+    closeCompletion(tabId);
     return false;
   }
 
   if (data === "\x15") {
     state.line = "";
     state.cursor = 0;
+    state.selectionAnchor = null;
+    state.inputReliable = true;
     state.dismissedSuggestionFor = "";
     state.suggestion = null;
     hideSuggestion(state);
+    hideLineSelection(state);
+    closeCompletion(tabId);
     return false;
   }
 
   if (data === "\x03" || data === "\x04") {
     state.line = "";
     state.cursor = 0;
+    state.selectionAnchor = null;
+    state.inputReliable = true;
     state.dismissedSuggestionFor = "";
     state.suggestion = null;
     hideSuggestion(state);
+    hideLineSelection(state);
+    closeCompletion(tabId);
     return false;
   }
 
   if (isPrintableInput(data)) {
+    if (hasLineSelection(state)) {
+      replaceCurrentLineRange(tabId, getSelectionStart(state), getSelectionEnd(state), data);
+      return true;
+    }
+    state.inputReliable = true;
     state.line = `${state.line.slice(0, state.cursor)}${data}${state.line.slice(state.cursor)}`;
     state.cursor += data.length;
+    state.selectionAnchor = null;
     state.dismissedSuggestionFor = "";
     state.suggestion = null;
     hideSuggestion(state);
+    hideLineSelection(state);
+    closeCompletion(tabId);
     return false;
   }
 
   if (data.startsWith("\x1b")) {
-    updateTrackedCursor(state, data);
+    const tracked = updateTrackedCursor(state, data);
+    state.inputReliable = tracked;
+    state.selectionAnchor = null;
     state.dismissedSuggestionFor = state.line;
     state.suggestion = null;
     hideSuggestion(state);
+    hideLineSelection(state);
+    closeCompletion(tabId);
   }
 
   return false;
+}
+
+function isInputAssistanceAvailable(tabId: string): boolean {
+  const state = inputStates.get(tabId);
+  const view = tabs.get(tabId);
+  if (!state || !view || !state.inputReliable || activeHistorySearch?.tabId === tabId || activeTerminalSearchTabId === tabId) {
+    return false;
+  }
+  if (isTabInAlternateBuffer(tabId)) {
+    return false;
+  }
+
+  const lineStart = view.terminal.buffer.active.cursorX - state.cursor;
+  return lineStart >= 0 && lineStart + state.line.length <= view.terminal.cols;
+}
+
+function getHorizontalNavigationCursor(state: TerminalInputState, direction: -1 | 1, event: KeyboardEvent): number {
+  if (event.metaKey) {
+    return direction < 0 ? 0 : state.line.length;
+  }
+  if (event.altKey) {
+    return direction < 0 ? previousWordBoundary(state.line, state.cursor) : nextWordBoundary(state.line, state.cursor);
+  }
+  return clamp(state.cursor + direction, 0, state.line.length);
+}
+
+function previousWordBoundary(line: string, cursor: number): number {
+  let index = Math.max(0, cursor);
+  while (index > 0 && /\s/.test(line[index - 1] ?? "")) {
+    index -= 1;
+  }
+  while (index > 0 && !/\s/.test(line[index - 1] ?? "")) {
+    index -= 1;
+  }
+  return index;
+}
+
+function nextWordBoundary(line: string, cursor: number): number {
+  let index = Math.min(line.length, cursor);
+  while (index < line.length && /\s/.test(line[index] ?? "")) {
+    index += 1;
+  }
+  while (index < line.length && !/\s/.test(line[index] ?? "")) {
+    index += 1;
+  }
+  return index;
+}
+
+function moveCurrentLineCursor(tabId: string, nextCursor: number, extendSelection: boolean): void {
+  const state = inputStates.get(tabId);
+  if (!state) {
+    return;
+  }
+
+  nextCursor = clamp(nextCursor, 0, state.line.length);
+  if (extendSelection && state.selectionAnchor === null) {
+    state.selectionAnchor = state.cursor;
+  } else if (!extendSelection) {
+    state.selectionAnchor = null;
+  }
+
+  const data = cursorMovementData(state.cursor, nextCursor);
+  state.cursor = nextCursor;
+  if (state.selectionAnchor === state.cursor) {
+    state.selectionAnchor = null;
+  }
+  state.dismissedSuggestionFor = state.line;
+  state.suggestion = null;
+  hideSuggestion(state);
+  closeCompletion(tabId);
+  if (data.length > 0) {
+    window.terminalApi.writeTerminal({ id: tabId, data });
+  }
+  scheduleLineSelectionUpdate(tabId);
+  tabs.get(tabId)?.terminal.focus();
+}
+
+function replaceCurrentLineRange(tabId: string, start: number, end: number, replacement: string): void {
+  const state = inputStates.get(tabId);
+  if (!state || !isInputAssistanceAvailable(tabId)) {
+    return;
+  }
+
+  start = clamp(start, 0, state.line.length);
+  end = clamp(end, start, state.line.length);
+  const data = `${cursorMovementData(state.cursor, end)}${"\x7f".repeat(end - start)}${replacement}`;
+  state.line = `${state.line.slice(0, start)}${replacement}${state.line.slice(end)}`;
+  state.cursor = start + replacement.length;
+  state.selectionAnchor = null;
+  state.dismissedSuggestionFor = "";
+  state.suggestion = null;
+  hideSuggestion(state);
+  hideLineSelection(state);
+  closeCompletion(tabId);
+  window.terminalApi.writeTerminal({ id: tabId, data });
+  tabs.get(tabId)?.terminal.focus();
+  updateSuggestion(tabId);
+}
+
+function cursorMovementData(from: number, to: number): string {
+  const delta = to - from;
+  if (delta < 0) {
+    return "\x1b[D".repeat(Math.abs(delta));
+  }
+  if (delta > 0) {
+    return "\x1b[C".repeat(delta);
+  }
+  return "";
+}
+
+function hasLineSelection(state: TerminalInputState): boolean {
+  return state.selectionAnchor !== null && state.selectionAnchor !== state.cursor;
+}
+
+function getSelectionStart(state: TerminalInputState): number {
+  return Math.min(state.selectionAnchor ?? state.cursor, state.cursor);
+}
+
+function getSelectionEnd(state: TerminalInputState): number {
+  return Math.max(state.selectionAnchor ?? state.cursor, state.cursor);
+}
+
+function clearLineSelection(tabId: string): void {
+  const state = inputStates.get(tabId);
+  if (!state) {
+    return;
+  }
+  state.selectionAnchor = null;
+  hideLineSelection(state);
+}
+
+async function copyLineSelection(state: TerminalInputState): Promise<void> {
+  if (!hasLineSelection(state)) {
+    return;
+  }
+  await navigator.clipboard.writeText(state.line.slice(getSelectionStart(state), getSelectionEnd(state)));
+}
+
+async function pasteIntoCurrentLine(tabId: string): Promise<void> {
+  const text = normalizeSingleLinePaste(await navigator.clipboard.readText());
+  const state = inputStates.get(tabId);
+  if (!state) {
+    return;
+  }
+  const start = hasLineSelection(state) ? getSelectionStart(state) : state.cursor;
+  const end = hasLineSelection(state) ? getSelectionEnd(state) : state.cursor;
+  replaceCurrentLineRange(tabId, start, end, text);
+}
+
+function normalizeSingleLinePaste(value: string): string {
+  return value.replaceAll(/\r\n|\r|\n/g, " ");
+}
+
+function renderLineSelection(tabId: string): void {
+  const state = inputStates.get(tabId);
+  const view = tabs.get(tabId);
+  if (!state || !view || !hasLineSelection(state) || !isInputAssistanceAvailable(tabId)) {
+    if (state) {
+      hideLineSelection(state);
+    }
+    return;
+  }
+
+  const cell = estimateTerminalCellSize(view);
+  const origin = getTerminalScreenOrigin(view);
+  const lineStart = view.terminal.buffer.active.cursorX - state.cursor;
+  const start = getSelectionStart(state);
+  const end = getSelectionEnd(state);
+  state.selectionOverlay.style.left = `${origin.left + (lineStart + start) * cell.width}px`;
+  state.selectionOverlay.style.top = `${origin.top + view.terminal.buffer.active.cursorY * cell.height}px`;
+  state.selectionOverlay.style.width = `${Math.max(1, end - start) * cell.width}px`;
+  state.selectionOverlay.style.height = `${cell.height}px`;
+  state.selectionOverlay.classList.add("is-visible");
+}
+
+function hideLineSelection(state: TerminalInputState): void {
+  state.selectionOverlay.classList.remove("is-visible");
+}
+
+function scheduleLineSelectionUpdate(tabId: string): void {
+  window.requestAnimationFrame(() => {
+    renderLineSelection(tabId);
+  });
+}
+
+async function openCompletion(tabId: string): Promise<void> {
+  const state = inputStates.get(tabId);
+  const view = tabs.get(tabId);
+  if (!state || !view || !isInputAssistanceAvailable(tabId) || hasLineSelection(state)) {
+    return;
+  }
+
+  const target = getCompletionTarget(state.line, state.cursor);
+  if (!target) {
+    closeCompletion(tabId);
+    return;
+  }
+
+  const items = await window.terminalApi.listCompletions({
+    cwd: view.metadata.cwd,
+    token: target.token,
+    directoriesOnly: target.directoriesOnly
+  });
+  const limitedItems = items.slice(0, completionResultLimit);
+  if (limitedItems.length === 0) {
+    closeCompletion(tabId);
+    return;
+  }
+
+  if (limitedItems.length === 1) {
+    const [item] = limitedItems;
+    if (item) {
+      applyCompletionItem(tabId, target, item);
+    }
+    return;
+  }
+
+  state.completion = {
+    tokenStart: target.tokenStart,
+    tokenEnd: target.tokenEnd,
+    tokenDirectoryPrefix: target.tokenDirectoryPrefix,
+    directoriesOnly: target.directoriesOnly,
+    selectedIndex: 0,
+    interactionMode: "keyboard",
+    items: limitedItems
+  };
+  state.suggestion = null;
+  hideSuggestion(state);
+  renderCompletion(tabId);
+}
+
+function getCompletionTarget(line: string, cursor: number): CompletionTarget | null {
+  if (cursor < 0 || cursor > line.length) {
+    return null;
+  }
+
+  const beforeCursor = line.slice(0, cursor);
+  const tokenMatch = /(?:^|\s)((?:\\.|[^\s])*)$/.exec(beforeCursor);
+  if (!tokenMatch || tokenMatch.index < 0) {
+    return null;
+  }
+
+  const token = tokenMatch[1] ?? "";
+  const tokenStart = beforeCursor.length - token.length;
+  const command = getCurrentCommandName(line);
+  const slashIndex = token.lastIndexOf("/");
+  return {
+    token,
+    tokenDirectoryPrefix: slashIndex === -1 ? "" : token.slice(0, slashIndex + 1),
+    tokenStart,
+    tokenEnd: cursor,
+    directoriesOnly: command === "cd"
+  };
+}
+
+function getCurrentCommandName(line: string): string {
+  return line.trimStart().split(/\s+/, 1)[0] ?? "";
+}
+
+function renderCompletion(tabId: string): void {
+  const state = inputStates.get(tabId);
+  const view = tabs.get(tabId);
+  if (!state?.completion || !view) {
+    return;
+  }
+
+  state.completionResults.replaceChildren();
+  for (const [index, item] of state.completion.items.entries()) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "completion-result";
+    button.classList.toggle("is-selected", index === state.completion.selectedIndex);
+    button.addEventListener("mouseenter", () => {
+      if (!state.completion || state.completion.interactionMode !== "mouse") {
+        return;
+      }
+      selectCompletionItem(tabId, index, "mouse");
+    });
+    button.addEventListener("mousemove", () => {
+      selectCompletionItem(tabId, index, "mouse");
+    });
+    button.addEventListener("click", () => {
+      const current = inputStates.get(tabId)?.completion;
+      if (current) {
+        applyCompletionItem(tabId, current, item);
+      }
+    });
+
+    const icon = document.createElement("span");
+    icon.className = "completion-icon";
+    icon.textContent = item.kind === "directory" ? "d" : "f";
+    const name = document.createElement("span");
+    name.className = "completion-name";
+    name.textContent = item.display;
+    const kind = document.createElement("span");
+    kind.className = "completion-kind";
+    kind.textContent = item.kind === "directory" ? "Directory" : "File";
+    button.append(icon, name, kind);
+    state.completionResults.append(button);
+  }
+
+  const selected = state.completion.items[state.completion.selectedIndex];
+  state.completionDetail.replaceChildren();
+  if (selected) {
+    const title = document.createElement("div");
+    title.className = "completion-detail-title";
+    title.textContent = selected.display;
+    const subtitle = document.createElement("div");
+    subtitle.className = "completion-detail-subtitle";
+    subtitle.textContent = selected.kind === "directory" ? "Directory" : "File";
+    state.completionDetail.append(title, subtitle);
+  }
+
+  const cell = estimateTerminalCellSize(view);
+  const origin = getTerminalScreenOrigin(view);
+  const lineStart = view.terminal.buffer.active.cursorX - state.cursor;
+  const top = origin.top + (view.terminal.buffer.active.cursorY + 1) * cell.height + 4;
+  const panelWidth = Math.min(520, Math.max(260, view.element.clientWidth - 24));
+  const left = origin.left + (lineStart + state.completion.tokenStart) * cell.width;
+  state.completionPanel.style.width = `${panelWidth}px`;
+  state.completionPanel.style.left = `${clamp(left, 8, Math.max(8, view.element.clientWidth - panelWidth - 8))}px`;
+  state.completionPanel.style.top = `${Math.max(8, Math.min(top, view.element.clientHeight - 244))}px`;
+  state.completionPanel.classList.add("is-open");
+}
+
+function selectCompletionItem(tabId: string, index: number, interactionMode: "keyboard" | "mouse"): void {
+  const state = inputStates.get(tabId);
+  if (!state?.completion) {
+    return;
+  }
+  const maxIndex = state.completion.items.length - 1;
+  state.completion.selectedIndex = maxIndex < 0 ? 0 : clamp(index, 0, maxIndex);
+  state.completion.interactionMode = interactionMode;
+  renderCompletion(tabId);
+}
+
+function acceptCompletion(tabId: string): void {
+  const state = inputStates.get(tabId);
+  if (!state?.completion) {
+    return;
+  }
+  const item = state.completion.items[state.completion.selectedIndex];
+  if (!item) {
+    closeCompletion(tabId);
+    return;
+  }
+  applyCompletionItem(tabId, state.completion, item);
+}
+
+function applyCompletionItem(
+  tabId: string,
+  target: Pick<CompletionTarget, "tokenDirectoryPrefix" | "tokenStart" | "tokenEnd">,
+  item: CompletionItem
+): void {
+  replaceCurrentLineRange(tabId, target.tokenStart, target.tokenEnd, `${target.tokenDirectoryPrefix}${item.insertText}`);
+}
+
+function closeCompletion(tabId: string): void {
+  const state = inputStates.get(tabId);
+  if (!state) {
+    return;
+  }
+  state.completion = null;
+  state.completionPanel.classList.remove("is-open");
+  state.completionResults.replaceChildren();
+  state.completionDetail.replaceChildren();
 }
 
 async function recordCommandIfEligible(tabId: string, rawCommand: string): Promise<void> {
@@ -2464,6 +3069,9 @@ function updateSuggestion(tabId: string): void {
   if (
     state.line.length === 0 ||
     state.cursor !== state.line.length ||
+    !state.inputReliable ||
+    hasLineSelection(state) ||
+    state.completion !== null ||
     state.dismissedSuggestionFor === state.line ||
     isTabInAlternateBuffer(tabId)
   ) {
@@ -2539,10 +3147,13 @@ function acceptSuggestion(tabId: string, mode: "all" | "partial"): void {
 
   state.line += accepted;
   state.cursor = state.line.length;
+  state.selectionAnchor = null;
   state.dismissedSuggestionFor = "";
   window.terminalApi.writeTerminal({ id: tabId, data: accepted });
   state.suggestion = null;
   hideSuggestion(state);
+  hideLineSelection(state);
+  closeCompletion(tabId);
   tabs.get(tabId)?.terminal.focus();
 }
 
@@ -2566,6 +3177,8 @@ function openHistorySearch(tabId: string): void {
 
   state.suggestion = null;
   hideSuggestion(state);
+  clearLineSelection(tabId);
+  closeCompletion(tabId);
   activeHistorySearch = {
     tabId,
     query: state.line,
@@ -2595,6 +3208,8 @@ function closeHistorySearch(): void {
   if (state) {
     state.suggestion = null;
     hideSuggestion(state);
+    hideLineSelection(state);
+    closeCompletion(tabId);
   }
 }
 
@@ -2613,6 +3228,8 @@ function openTerminalSearch(): void {
   activeTerminalSearchTabId = activeTabId;
   state.suggestion = null;
   hideSuggestion(state);
+  clearLineSelection(activeTabId);
+  closeCompletion(activeTabId);
   state.searchPanel.classList.add("is-open");
   state.searchInput.value = state.searchQuery;
   renderTerminalSearchStatus(state);
@@ -2862,10 +3479,16 @@ function replaceCurrentLine(tabId: string, command: string, run: boolean): void 
     return;
   }
 
-  const data = `${"\x7f".repeat(state.line.length)}${command}${run ? "\r" : ""}`;
+  const data = `${cursorMovementData(state.cursor, state.line.length)}${"\x7f".repeat(state.line.length)}${command}${run ? "\r" : ""}`;
   state.line = run ? "" : command;
   state.cursor = state.line.length;
+  state.selectionAnchor = null;
+  state.inputReliable = true;
   state.dismissedSuggestionFor = "";
+  state.suggestion = null;
+  hideSuggestion(state);
+  hideLineSelection(state);
+  closeCompletion(tabId);
   window.terminalApi.writeTerminal({ id: tabId, data });
   if (run) {
     recordCommandIfEligible(tabId, command).catch((error) => {
@@ -2878,16 +3501,21 @@ function isPrintableInput(data: string): boolean {
   return !data.includes("\x1b") && !data.includes("\r") && !data.includes("\n") && /^[^\x00-\x1f\x7f]+$/.test(data);
 }
 
-function updateTrackedCursor(state: TerminalInputState, data: string): void {
+function updateTrackedCursor(state: TerminalInputState, data: string): boolean {
   if (data === "\x1b[D") {
     state.cursor = Math.max(0, state.cursor - 1);
+    return true;
   } else if (data === "\x1b[C") {
     state.cursor = Math.min(state.line.length, state.cursor + 1);
+    return true;
   } else if (data === "\x1b[H" || data === "\x1b[1~") {
     state.cursor = 0;
+    return true;
   } else if (data === "\x1b[F" || data === "\x1b[4~") {
     state.cursor = state.line.length;
+    return true;
   }
+  return false;
 }
 
 function isCursorAtTrackedLineEnd(tabId: string): boolean {

@@ -51,12 +51,18 @@ _flickterm_preexec() {
     "$(_flickterm_percent_encode "$cwd")"
 }
 
+_flickterm_precmd() {
+  emulate -L zsh
+  printf '\e]7777;FlickTermShellIntegrationReady;cwd=%s\a' \
+    "$(_flickterm_percent_encode "$PWD")"
+}
+
 autoload -Uz add-zsh-hook
 add-zsh-hook -d preexec _flickterm_preexec 2>/dev/null
 add-zsh-hook preexec _flickterm_preexec
-
-printf '\e]7777;FlickTermShellIntegrationReady;cwd=%s\a' \
-  "$(_flickterm_percent_encode "$PWD")"
+add-zsh-hook -d precmd _flickterm_precmd 2>/dev/null
+add-zsh-hook precmd _flickterm_precmd
+_flickterm_precmd
 "#;
 
 #[derive(Debug, Error)]
