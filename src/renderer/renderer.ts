@@ -515,8 +515,12 @@ window.terminalApi.onShellIntegrationStatus(({ id, detected, cwd }) => {
   }
   const view = tabs.get(id);
   if (view && cwd) {
+    const cwdChanged = view.metadata.cwd !== cwd;
     view.metadata.cwd = cwd;
-    markSessionsDirty();
+    if (cwdChanged) {
+      renderTabs();
+      markSessionsDirty();
+    }
     updateSuggestion(id);
   }
   if (settingsTab === "features" && isSettingsOpen()) {
@@ -877,10 +881,8 @@ async function reloadSettings(): Promise<void> {
 
 async function createTab(): Promise<void> {
   const id = `terminal-${crypto.randomUUID()}`;
-  const title = nextTerminalTitle();
   const response = await window.terminalApi.createTerminal({
     id,
-    title,
     cols: 80,
     rows: 24
   });
@@ -910,24 +912,6 @@ async function createTabFromSession(session: TerminalSessionTab): Promise<string
   }
   flushPendingTerminalData(response.tab.id);
   return response.tab.id;
-}
-
-function nextTerminalTitle(): string {
-  const usedNumbers = new Set<number>();
-
-  for (const view of tabs.values()) {
-    const match = /^zsh ([1-9]\d*)$/.exec(view.metadata.title);
-    if (match) {
-      usedNumbers.add(Number(match[1]));
-    }
-  }
-
-  let candidate = 1;
-  while (usedNumbers.has(candidate)) {
-    candidate += 1;
-  }
-
-  return `zsh ${candidate}`;
 }
 
 function attachTerminal(tab: TerminalTab, options: { deferPendingData?: boolean } = {}): void {
@@ -1198,8 +1182,10 @@ function activateTabAt(index: number): void {
 
 function renderTabs(): void {
   tabsElement.replaceChildren();
+  const displayTitles = getTabDisplayTitles();
 
   for (const [id, view] of tabs) {
+    const displayTitle = displayTitles.get(id) ?? view.metadata.title;
     const tabItem = document.createElement("div");
     tabItem.className = "tab-item";
     tabItem.classList.toggle("is-active", id === activeTabId);
@@ -1207,14 +1193,14 @@ function renderTabs(): void {
     const selectButton = document.createElement("button");
     selectButton.type = "button";
     selectButton.className = "tab-select";
-    selectButton.title = view.metadata.shell;
+    selectButton.title = formatTabTooltip(view, displayTitle);
     selectButton.addEventListener("click", () => {
       activateTab(id);
     });
 
     const label = document.createElement("span");
     label.className = "tab-label";
-    label.textContent = view.metadata.title;
+    label.textContent = displayTitle;
 
     const closeButton = document.createElement("button");
     closeButton.type = "button";
@@ -1229,6 +1215,81 @@ function renderTabs(): void {
     tabItem.append(selectButton, closeButton);
     tabsElement.append(tabItem);
   }
+}
+
+function getTabDisplayTitles(): Map<string, string> {
+  const baseTitles = new Map<string, string>();
+  const titleCounts = new Map<string, number>();
+
+  for (const [id, view] of tabs) {
+    const baseTitle = getTabBaseTitle(view);
+    baseTitles.set(id, baseTitle);
+    titleCounts.set(baseTitle, (titleCounts.get(baseTitle) ?? 0) + 1);
+  }
+
+  const titleIndexes = new Map<string, number>();
+  const displayTitles = new Map<string, string>();
+  for (const [id] of tabs) {
+    const baseTitle = baseTitles.get(id);
+    if (!baseTitle) {
+      continue;
+    }
+    if ((titleCounts.get(baseTitle) ?? 0) <= 1) {
+      displayTitles.set(id, baseTitle);
+      continue;
+    }
+
+    const index = (titleIndexes.get(baseTitle) ?? 0) + 1;
+    titleIndexes.set(baseTitle, index);
+    displayTitles.set(id, index === 1 ? baseTitle : `${baseTitle} ${index}`);
+  }
+
+  return displayTitles;
+}
+
+function getTabBaseTitle(view: RendererTerminalTab): string {
+  return directoryNameFromPath(view.metadata.cwd) ?? nonEmptyText(view.metadata.title) ?? shellName(view.metadata.shell);
+}
+
+function directoryNameFromPath(path: string | undefined): string | null {
+  const trimmed = path?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const withoutTrailingSeparators = trimmed.replace(/[\\/]+$/, "");
+  if (!withoutTrailingSeparators) {
+    return trimmed.startsWith("\\") ? "\\" : "/";
+  }
+  if (
+    /^\/Users\/[^/]+$/.test(withoutTrailingSeparators) ||
+    /^\/home\/[^/]+$/.test(withoutTrailingSeparators) ||
+    /^[A-Za-z]:[\\/]Users[\\/][^\\/]+$/.test(withoutTrailingSeparators)
+  ) {
+    return "~";
+  }
+
+  const parts = withoutTrailingSeparators.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1) ?? withoutTrailingSeparators;
+}
+
+function nonEmptyText(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function shellName(shell: string): string {
+  return shell.split(/[\\/]+/).filter(Boolean).at(-1) ?? shell;
+}
+
+function formatTabTooltip(view: RendererTerminalTab, displayTitle: string): string {
+  const details = [displayTitle];
+  if (view.metadata.cwd && view.metadata.cwd !== displayTitle) {
+    details.push(view.metadata.cwd);
+  }
+  if (view.metadata.shell && view.metadata.shell !== displayTitle) {
+    details.push(view.metadata.shell);
+  }
+  return details.join("\n");
 }
 
 function renderQuickCommands(): void {
