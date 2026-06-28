@@ -31,6 +31,7 @@ const MAX_SHELL_COMMAND_BYTES: usize = 8192;
 const MAX_SHELL_CWD_BYTES: usize = 4096;
 const SHELL_INTEGRATION_TOKEN_BYTES: usize = 32;
 const FLICKTERM_SHELL_INTEGRATION_TOKEN_ENV: &str = "FLICKTERM_SHELL_INTEGRATION_TOKEN";
+const FLICKTERM_PROMPT_THEME_ENV: &str = "FLICKTERM_PROMPT_THEME";
 const FLICKTERM_OSC_PREFIX: &[u8] = b"7777;FlickTermExecutedCommand;";
 const FLICKTERM_READY_OSC_PREFIX: &[u8] = b"7777;FlickTermShellIntegrationReady;";
 
@@ -117,6 +118,17 @@ impl PtyManager {
         for (key, value) in env::vars() {
             command.env(key, value);
         }
+        let current_settings = settings
+            .get_settings()
+            .map_err(|error| PtyError::Spawn(error.to_string()))?;
+        command.env(
+            FLICKTERM_PROMPT_THEME_ENV,
+            if current_settings.features.prompt_theme.enabled {
+                "modern"
+            } else {
+                ""
+            },
+        );
         if let Some(path) = terminal_path_env() {
             command.env("PATH", path);
         }

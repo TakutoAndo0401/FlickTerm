@@ -1,8 +1,8 @@
 use crate::types::{
     AppLanguage, AppSettings, AppSettingsSnapshot, AppearanceSettings, AutosuggestionSettings,
-    CommandHistorySettings, CursorStyle, FeatureSettings, LayoutSettings, QuickCommand,
-    QuickCommandRunMode, SessionRestoreSettings, ShortcutBinding, ShortcutRegistrationError,
-    ShortcutScope,
+    CommandHistorySettings, CursorStyle, FeatureSettings, LayoutSettings, PromptThemeSettings,
+    QuickCommand, QuickCommandRunMode, SessionRestoreSettings, ShortcutBinding,
+    ShortcutRegistrationError, ShortcutScope,
 };
 use serde_json::Value;
 use std::{
@@ -376,6 +376,9 @@ fn normalize_features(value: Option<&Value>) -> FeatureSettings {
     let autosuggestions = object
         .and_then(|object| object.get("autosuggestions"))
         .and_then(Value::as_object);
+    let prompt_theme = object
+        .and_then(|object| object.get("promptTheme"))
+        .and_then(Value::as_object);
     let session_restore = object
         .and_then(|object| object.get("sessionRestore"))
         .and_then(Value::as_object);
@@ -401,6 +404,12 @@ fn normalize_features(value: Option<&Value>) -> FeatureSettings {
                 .and_then(|object| object.get("shellIntegration"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+        },
+        prompt_theme: PromptThemeSettings {
+            enabled: prompt_theme
+                .and_then(|object| object.get("enabled"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
         },
         autosuggestions: AutosuggestionSettings {
             enabled: autosuggestions
@@ -525,6 +534,7 @@ fn default_settings() -> AppSettings {
                 max_entries: DEFAULT_COMMAND_HISTORY_MAX_ENTRIES,
                 shell_integration: false,
             },
+            prompt_theme: PromptThemeSettings { enabled: true },
             autosuggestions: AutosuggestionSettings {
                 enabled: true,
                 accept_with_tab: false,

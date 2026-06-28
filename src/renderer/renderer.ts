@@ -224,6 +224,8 @@ const settingsCopy = {
       shellIntegrationInstall: "Add to ~/.zshrc",
       shellIntegrationDetected: "Detected in this tab",
       shellIntegrationNotDetected: "Not detected in this tab yet",
+      promptTheme: "Modern Prompt",
+      promptThemeHint: "Use FlickTerm's two-line zsh prompt in new tabs when no custom prompt is active",
       autosuggestions: "Autosuggestions",
       autosuggestionsHint: "Show the best matching command as ghost text",
       acceptWithTab: "Accept With Tab",
@@ -372,6 +374,8 @@ const settingsCopy = {
       shellIntegrationInstall: "~/.zshrc に追加",
       shellIntegrationDetected: "このタブで検出済み",
       shellIntegrationNotDetected: "このタブでは未検出",
+      promptTheme: "モダンプロンプト",
+      promptThemeHint: "カスタムプロンプトがない新しいタブだけで、FlickTerm の2行 zsh プロンプトを使う",
       autosuggestions: "自動候補",
       autosuggestionsHint: "最も一致するコマンドを薄い文字で表示",
       acceptWithTab: "Tab で候補を採用",
@@ -2301,8 +2305,9 @@ function renderFeaturesEditor(): void {
   }
 
   const text = copy();
-  const shellIntegrationEnabled =
-    draftSettings.features.commandHistory.enabled && draftSettings.features.commandHistory.shellIntegration;
+  const shellIntegrationSetupVisible =
+    (draftSettings.features.commandHistory.enabled && draftSettings.features.commandHistory.shellIntegration) ||
+    draftSettings.features.promptTheme.enabled;
   featuresEditorElement.replaceChildren(
     createFeatureCheckboxRow(
       text.features.commandHistory,
@@ -2336,7 +2341,19 @@ function renderFeaturesEditor(): void {
         renderFeaturesEditor();
       }
     ),
-    ...(shellIntegrationEnabled ? [createShellIntegrationSetup()] : []),
+    createFeatureCheckboxRow(
+      text.features.promptTheme,
+      text.features.promptThemeHint,
+      draftSettings.features.promptTheme.enabled,
+      (checked) => {
+        if (!draftSettings) {
+          return;
+        }
+        draftSettings.features.promptTheme.enabled = checked;
+        renderFeaturesEditor();
+      }
+    ),
+    ...(shellIntegrationSetupVisible ? [createShellIntegrationSetup()] : []),
     createFeatureCheckboxRow(
       text.features.autosuggestions,
       text.features.autosuggestionsHint,
@@ -4500,6 +4517,7 @@ function cloneSettings(settings: AppSettings): AppSettings {
 function cloneFeatures(features: FeatureSettings): FeatureSettings {
   return {
     commandHistory: { ...features.commandHistory },
+    promptTheme: { ...features.promptTheme },
     autosuggestions: { ...features.autosuggestions },
     sessionRestore: { ...features.sessionRestore }
   };

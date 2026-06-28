@@ -43,6 +43,9 @@ export type FeatureSettings = {
     maxEntries: number;
     shellIntegration: boolean;
   };
+  promptTheme: {
+    enabled: boolean;
+  };
   autosuggestions: {
     enabled: boolean;
     acceptWithTab: boolean;

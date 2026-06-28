@@ -6,7 +6,7 @@ const ZSH_INTEGRATION_RELATIVE_PATH: [&str; 2] = ["shell-integration", "zsh.zsh"
 
 const ZSH_INTEGRATION_SCRIPT: &str = r#"# FlickTerm zsh shell integration.
 # This file is managed by FlickTerm. Source it from ~/.zshrc to let FlickTerm
-# save the command that zsh is about to execute as command history.
+# save executed commands and optionally use the FlickTerm prompt theme.
 
 if [[ ! -o interactive ]]; then
   return 0 2>/dev/null || exit 0
@@ -43,6 +43,10 @@ _flickterm_preexec() {
   local cwd="$PWD"
   local token="${FLICKTERM_SHELL_INTEGRATION_TOKEN:-}"
 
+  if [[ "${FLICKTERM_PROMPT_THEME:-}" == "modern" && -n "${FLICKTERM_PROMPT_LAST_PROMPT:-}" && "$PROMPT" == "$FLICKTERM_PROMPT_LAST_PROMPT" ]]; then
+    print -P -rn -- "%f%k"
+  fi
+
   if [[ -z "$command" || -z "$token" ]]; then
     return 0
   fi
@@ -53,8 +57,100 @@ _flickterm_preexec() {
     "$(_flickterm_percent_encode "$cwd")"
 }
 
+_flickterm_prompt_escape() {
+  emulate -L zsh
+  local input="$1"
+  input="${input//$'\n'/ }"
+  input="${input//$'\r'/ }"
+  input="${input//$'\t'/ }"
+  input="${input//\%/%%}"
+  print -rn -- "$input"
+}
+
+_flickterm_prompt_has_external_owner() {
+  emulate -L zsh
+  local hook
+
+  for hook in "${precmd_functions[@]}"; do
+    case "$hook" in
+      _flickterm_precmd) ;;
+      *starship*|*p10k*|*_p9k*|*powerlevel*|*spaceship*|*pure*) return 0 ;;
+    esac
+  done
+
+  if (( ${+functions[starship_precmd]} || ${+functions[_p9k_precmd]} || ${+functions[prompt_pure_precmd]} || ${+functions[spaceship_prompt]} )); then
+    return 0
+  fi
+
+  [[ -n "${STARSHIP_SESSION_KEY:-}" || -n "${POWERLEVEL9K_VERSION:-}" || -n "${POWERLEVEL10K_VERSION:-}" || -n "${SPACESHIP_VERSION:-}" || -n "${PURE_PROMPT_SYMBOL:-}" ]]
+}
+
+_flickterm_prompt_is_default_prompt() {
+  emulate -L zsh
+  local prompt_value="${PROMPT:-${PS1:-}}"
+
+  case "$prompt_value" in
+    ""|"%m%# "|"%n@%m %1~ %# "|"%n@%m %~ %# "|"%n@%m %c %# "|"%# "|"> ") return 0 ;;
+  esac
+
+  return 1
+}
+
+_flickterm_prompt_git_segment() {
+  emulate -L zsh
+  command git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+
+  local branch
+  branch="$(command git symbolic-ref --quiet --short HEAD 2>/dev/null)"
+  if [[ -z "$branch" ]]; then
+    branch="$(command git rev-parse --short HEAD 2>/dev/null)" || return 0
+    branch="detached:$branch"
+  fi
+
+  local state=""
+  if ! command git diff --quiet --ignore-submodules -- 2>/dev/null; then
+    state="*"
+  fi
+  if ! command git diff --cached --quiet --ignore-submodules -- 2>/dev/null; then
+    state="${state}+"
+  fi
+
+  branch="$(_flickterm_prompt_escape "$branch")"
+  print -rn -- "  %F{244}git:%f%F{magenta}${branch}%f"
+  if [[ -n "$state" ]]; then
+    print -rn -- "%F{yellow}${state}%f"
+  fi
+}
+
+_flickterm_update_prompt() {
+  emulate -L zsh
+
+  [[ "${FLICKTERM_PROMPT_THEME:-}" == "modern" ]] || return 0
+  [[ -z "${FLICKTERM_DISABLE_PROMPT_THEME:-}" ]] || return 0
+
+  if [[ -n "${RPROMPT:-}" || -n "${RPS1:-}" ]]; then
+    return 0
+  fi
+
+  if [[ -n "${FLICKTERM_PROMPT_LAST_PROMPT:-}" ]]; then
+    [[ "$PROMPT" == "$FLICKTERM_PROMPT_LAST_PROMPT" ]] || return 0
+  else
+    _flickterm_prompt_has_external_owner && return 0
+    _flickterm_prompt_is_default_prompt || return 0
+  fi
+
+  local git_segment="$(_flickterm_prompt_git_segment)"
+  local next_prompt="%F{244}%D{%H:%M}%f  %F{39}%~%f${git_segment}"$'\n'"%(?.%F{green}>.%F{red}>)%f %F{120}"
+
+  PROMPT="$next_prompt"
+  PS1="$next_prompt"
+  FLICKTERM_PROMPT_LAST_PROMPT="$next_prompt"
+}
+
 _flickterm_precmd() {
   emulate -L zsh
+  _flickterm_update_prompt
+
   local token="${FLICKTERM_SHELL_INTEGRATION_TOKEN:-}"
 
   if [[ -z "$token" ]]; then
@@ -98,9 +194,8 @@ pub fn zshrc_snippet(app: &AppHandle) -> Result<String, ShellIntegrationError> {
     let display_path = path.to_string_lossy();
     Ok(format!(
         "# FlickTerm shell integration\n\
-         # Sends the command that zsh is about to execute back to FlickTerm,\n\
-         # so FlickTerm can save the actual executed command in its history.\n\
-         # Remove these lines to disable FlickTerm command history integration.\n\
+         # Sends zsh context back to FlickTerm for command history and the optional prompt theme.\n\
+         # Remove these lines to disable FlickTerm shell integration.\n\
          if [ -r \"{display_path}\" ]; then\n\
            source \"{display_path}\"\n\
          fi"

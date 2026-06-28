@@ -83,6 +83,12 @@ pub struct CommandHistorySettings {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PromptThemeSettings {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AutosuggestionSettings {
     pub enabled: bool,
     pub accept_with_tab: bool,
@@ -98,6 +104,7 @@ pub struct SessionRestoreSettings {
 #[serde(rename_all = "camelCase")]
 pub struct FeatureSettings {
     pub command_history: CommandHistorySettings,
+    pub prompt_theme: PromptThemeSettings,
     pub autosuggestions: AutosuggestionSettings,
     pub session_restore: SessionRestoreSettings,
 }
