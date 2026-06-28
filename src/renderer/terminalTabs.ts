@@ -5,6 +5,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Terminal } from "@xterm/xterm";
+import type { IDecoration, ITheme } from "@xterm/xterm";
 import type { AppearanceSettings, TerminalTab } from "../shared/terminalTypes";
 
 export type RendererTerminalTab = {
@@ -14,6 +15,37 @@ export type RendererTerminalTab = {
   searchAddon: SearchAddon;
   serializeAddon: SerializeAddon;
   element: HTMLDivElement;
+  commandDecorations: IDecoration[];
+};
+
+const terminalTheme: ITheme = {
+  background: "#0f1316",
+  foreground: "#d7dde5",
+  cursor: "#f8fafc",
+  cursorAccent: "#0f1316",
+  selectionBackground: "#254766",
+  selectionForeground: "#f8fafc",
+  selectionInactiveBackground: "#1f3448",
+  scrollbarSliderBackground: "rgba(148, 163, 184, 0.20)",
+  scrollbarSliderHoverBackground: "rgba(148, 163, 184, 0.34)",
+  scrollbarSliderActiveBackground: "rgba(148, 163, 184, 0.46)",
+  overviewRulerBorder: "#242c35",
+  black: "#111827",
+  red: "#f87171",
+  green: "#34d399",
+  yellow: "#fbbf24",
+  blue: "#60a5fa",
+  magenta: "#c084fc",
+  cyan: "#22d3ee",
+  white: "#d1d5db",
+  brightBlack: "#6b7280",
+  brightRed: "#fb7185",
+  brightGreen: "#4ade80",
+  brightYellow: "#facc15",
+  brightBlue: "#93c5fd",
+  brightMagenta: "#d8b4fe",
+  brightCyan: "#67e8f9",
+  brightWhite: "#f8fafc"
 };
 
 export function createTerminalView(tab: TerminalTab, appearance: AppearanceSettings): RendererTerminalTab {
@@ -26,12 +58,10 @@ export function createTerminalView(tab: TerminalTab, appearance: AppearanceSetti
     letterSpacing: appearance.letterSpacing,
     lineHeight: appearance.lineHeight,
     scrollback: 4000,
-    theme: {
-      background: "#111315",
-      foreground: "#d6d8dc",
-      cursor: "#ffffff",
-      selectionBackground: "#355c7d"
-    }
+    overviewRuler: {
+      width: 3
+    },
+    theme: terminalTheme
   });
 
   const fitAddon = new FitAddon();
@@ -55,7 +85,8 @@ export function createTerminalView(tab: TerminalTab, appearance: AppearanceSetti
     fitAddon,
     searchAddon,
     serializeAddon,
-    element
+    element,
+    commandDecorations: []
   };
 }
 

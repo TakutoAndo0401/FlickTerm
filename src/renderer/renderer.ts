@@ -33,6 +33,25 @@ type FixedShortcutAction = {
   defaultScope: ShortcutScope;
 };
 
+type QuickCommandTone =
+  | "default"
+  | "git"
+  | "package"
+  | "build"
+  | "filesystem"
+  | "network"
+  | "shell"
+  | "danger";
+
+type QuickCommandRisk = "normal" | "caution" | "destructive";
+
+type QuickCommandVisuals = {
+  tone: QuickCommandTone;
+  risk: QuickCommandRisk;
+  categoryLabel: string;
+  modeLabel: string;
+};
+
 type ValidationResult = {
   valid: boolean;
   messages: string[];
@@ -152,6 +171,20 @@ const settingsCopy = {
       send: "Run",
       insert: "Insert",
       confirm: "Confirm"
+    },
+    commandCategories: {
+      default: "CMD",
+      git: "GIT",
+      package: "PKG",
+      build: "BUILD",
+      filesystem: "FILES",
+      network: "NET",
+      shell: "SHELL",
+      danger: "RISK"
+    },
+    commandRisks: {
+      caution: "Caution",
+      destructive: "Danger"
     },
     shortcutActions: {
       toggleVisibility: "Toggle Visibility",
@@ -286,6 +319,20 @@ const settingsCopy = {
       send: "実行",
       insert: "入力",
       confirm: "確認"
+    },
+    commandCategories: {
+      default: "CMD",
+      git: "GIT",
+      package: "PKG",
+      build: "BUILD",
+      filesystem: "FILE",
+      network: "NET",
+      shell: "SH",
+      danger: "注意"
+    },
+    commandRisks: {
+      caution: "注意",
+      destructive: "危険"
     },
     shortcutActions: {
       toggleVisibility: "表示を切り替え",
@@ -427,6 +474,19 @@ const cursorStyleOptions = [
   { label: "Underline", value: "underline" }
 ] as const;
 const cursorStyleValues = new Set<string>(cursorStyleOptions.map((option) => option.value));
+const gitCommands = new Set(["git", "gh", "hub"]);
+const packageCommands = new Set(["npm", "pnpm", "yarn", "bun", "cargo", "brew", "gem", "pip", "pip3", "uv"]);
+const buildCommands = new Set(["make", "mise", "tauri", "vite", "tsc", "webpack", "rollup", "cargo-tauri"]);
+const filesystemCommands = new Set(["cd", "ls", "pwd", "cp", "mv", "mkdir", "touch", "open", "code"]);
+const networkCommands = new Set(["curl", "wget", "ssh", "scp", "sftp", "rsync"]);
+const shellCommands = new Set(["clear", "history", "source", ".", "exec", "env"]);
+const destructiveCommands = new Set(["rm", "rmdir", "unlink", "shred", "truncate", "mkfs", "dd"]);
+const cautionCommands = new Set(["sudo", "chmod", "chown", "kill", "killall", "pkill", "launchctl"]);
+const commandWrapperTokens = new Set(["sudo", "env", "command", "builtin", "noglob", "time"]);
+const commandRunnerTokens = new Set(["exec", "run", "x", "dlx"]);
+const buildSubcommands = new Set(["build", "dev", "start", "storybook", "test", "lint", "typecheck", "check"]);
+const shellControlTokens = new Set(["&&", "||", "|", ";"]);
+const commandDecorationLimit = 240;
 
 const tabs = new Map<string, RendererTerminalTab>();
 const inputStates = new Map<string, TerminalInputState>();
@@ -1340,11 +1400,56 @@ function finishCommandPanelResize(pointerId: number): void {
 }
 
 function createQuickCommandButton(command: QuickCommand): HTMLButtonElement {
+  const visuals = getQuickCommandVisuals(command);
   const button = document.createElement("button");
   button.type = "button";
   button.className = "quick-command-button";
-  button.textContent = command.label;
-  button.title = command.command;
+  button.dataset.commandTone = visuals.tone;
+  button.dataset.commandRisk = visuals.risk;
+  button.dataset.runMode = command.runMode;
+  button.title = `${command.label}\n${command.command}\n${visuals.modeLabel}`;
+  button.setAttribute(
+    "aria-label",
+    `${command.label}. ${visuals.modeLabel}. ${command.command}`
+  );
+
+  const topLine = document.createElement("span");
+  topLine.className = "quick-command-topline";
+
+  const label = document.createElement("span");
+  label.className = "quick-command-label";
+  label.textContent = command.label;
+
+  const badges = document.createElement("span");
+  badges.className = "quick-command-badges";
+
+  const mode = document.createElement("span");
+  mode.className = "quick-command-mode";
+  mode.textContent = visuals.modeLabel;
+  badges.append(mode);
+
+  if (visuals.risk !== "normal") {
+    const risk = document.createElement("span");
+    risk.className = "quick-command-risk";
+    risk.textContent = copy().commandRisks[visuals.risk];
+    badges.append(risk);
+  }
+
+  const detail = document.createElement("span");
+  detail.className = "quick-command-detail";
+
+  const category = document.createElement("span");
+  category.className = "quick-command-category";
+  category.textContent = visuals.categoryLabel;
+
+  const commandPreview = document.createElement("code");
+  commandPreview.className = "quick-command-preview";
+  commandPreview.textContent = command.command;
+
+  topLine.append(label, badges);
+  detail.append(category, commandPreview);
+  button.append(topLine, detail);
+
   button.addEventListener("click", () => {
     runCommand(command).catch((error) => {
       console.error("Failed to run command", error);
@@ -1352,6 +1457,225 @@ function createQuickCommandButton(command: QuickCommand): HTMLButtonElement {
   });
 
   return button;
+}
+
+function getQuickCommandVisuals(command: QuickCommand): QuickCommandVisuals {
+  const tokens = tokenizeCommand(command.command);
+  const primaryCommand = getPrimaryCommandToken(tokens);
+  const risk = getQuickCommandRisk(command, tokens, primaryCommand);
+  const tone = risk === "destructive" ? "danger" : getQuickCommandTone(tokens, primaryCommand);
+
+  return {
+    tone,
+    risk,
+    categoryLabel: copy().commandCategories[tone],
+    modeLabel: copy().runModes[command.runMode]
+  };
+}
+
+function tokenizeCommand(command: string): string[] {
+  return command.match(/&&|\|\||[|;]|[^\s|;&]+/g) ?? [];
+}
+
+function getPrimaryCommandToken(tokens: string[]): string {
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? "";
+    const normalized = normalizeCommandToken(token);
+
+    if (
+      normalized.length === 0 ||
+      shellControlTokens.has(normalized) ||
+      normalized === "--" ||
+      isEnvironmentAssignment(normalized)
+    ) {
+      continue;
+    }
+
+    if (commandWrapperTokens.has(normalized)) {
+      continue;
+    }
+
+    return normalized;
+  }
+
+  return "";
+}
+
+function getPackageSubcommand(tokens: string[], primaryCommand: string): string {
+  const primaryIndex = tokens.findIndex((token) => normalizeCommandToken(token) === primaryCommand);
+  if (primaryIndex < 0) {
+    return "";
+  }
+
+  for (let index = primaryIndex + 1; index < tokens.length; index += 1) {
+    const token = normalizeCommandToken(tokens[index] ?? "");
+    if (token.length === 0 || shellControlTokens.has(token) || token === "--" || token.startsWith("-")) {
+      continue;
+    }
+    if (commandRunnerTokens.has(token)) {
+      continue;
+    }
+    return token;
+  }
+
+  return "";
+}
+
+function getQuickCommandTone(tokens: string[], primaryCommand: string): QuickCommandTone {
+  if (primaryCommand.length === 0) {
+    return "default";
+  }
+  if (gitCommands.has(primaryCommand)) {
+    return "git";
+  }
+  if (packageCommands.has(primaryCommand)) {
+    return buildSubcommands.has(getPackageSubcommand(tokens, primaryCommand))
+      ? "build"
+      : "package";
+  }
+  if (buildCommands.has(primaryCommand)) {
+    return "build";
+  }
+  if (filesystemCommands.has(primaryCommand)) {
+    return "filesystem";
+  }
+  if (networkCommands.has(primaryCommand)) {
+    return "network";
+  }
+  if (shellCommands.has(primaryCommand)) {
+    return "shell";
+  }
+
+  return "default";
+}
+
+function getQuickCommandRisk(
+  command: QuickCommand,
+  tokens: string[],
+  primaryCommand: string
+): QuickCommandRisk {
+  const normalizedCommand = command.command.toLowerCase();
+  const normalizedLabel = command.label.toLowerCase();
+  const normalizedTokens = tokens.map((token) => normalizeCommandToken(token));
+
+  if (
+    destructiveCommands.has(primaryCommand) ||
+    /\brm\s+-[^;\n]*[rf]/.test(normalizedCommand) ||
+    /\bgit\s+push\b[^;\n]*(?:--force|-f\b)/.test(normalizedCommand) ||
+    /\bgit\s+(?:reset\b[^;\n]*--hard|clean\b[^;\n]*(?:-f|--force))/.test(normalizedCommand) ||
+    /\b(?:delete|remove|drop|destroy|wipe)\b/.test(normalizedCommand) ||
+    /\b(?:delete|remove|drop|destroy|wipe)\b/.test(normalizedLabel) ||
+    /削除|消去|破棄/.test(normalizedCommand) ||
+    /削除|消去|破棄/.test(normalizedLabel)
+  ) {
+    return "destructive";
+  }
+
+  if (
+    normalizedTokens.some((token) => cautionCommands.has(token)) ||
+    /\bgit\s+(?:push|rebase|merge|reset|clean)\b/.test(normalizedCommand) ||
+    /\b(?:npm|pnpm|yarn|bun|brew|cargo)\s+(?:install|add|remove|uninstall|update|upgrade)\b/.test(normalizedCommand)
+  ) {
+    return "caution";
+  }
+
+  return "normal";
+}
+
+function normalizeCommandToken(token: string): string {
+  const unquoted = token.replace(/^["']|["']$/g, "");
+  const segments = unquoted.split("/");
+  return (segments[segments.length - 1] ?? "").toLowerCase();
+}
+
+function isEnvironmentAssignment(token: string): boolean {
+  return /^[a-z_][a-z0-9_]*=.*/i.test(token);
+}
+
+function markExecutedCommandLine(tabId: string, command: string): void {
+  if (command.trim().length === 0 || isTabInAlternateBuffer(tabId)) {
+    return;
+  }
+
+  const view = tabs.get(tabId);
+  if (!view) {
+    return;
+  }
+
+  const tokens = tokenizeCommand(command);
+  const primaryCommand = getPrimaryCommandToken(tokens);
+  const risk = getQuickCommandRisk(
+    {
+      id: "executed-command",
+      label: command,
+      command,
+      runMode: "send"
+    },
+    tokens,
+    primaryCommand
+  );
+  const tone = risk === "destructive" ? "danger" : getQuickCommandTone(tokens, primaryCommand);
+  const colors = getCommandLineDecorationColors(tone, risk);
+  const marker = view.terminal.registerMarker(0);
+  const decoration = view.terminal.registerDecoration({
+    marker,
+    x: 0,
+    width: 999,
+    height: 1,
+    backgroundColor: colors.background,
+    layer: "bottom",
+    overviewRulerOptions: {
+      color: colors.accent,
+      position: "full"
+    }
+  });
+
+  if (!decoration) {
+    return;
+  }
+
+  decoration.onRender((element) => {
+    element.classList.add("flickterm-command-decoration");
+    element.dataset.commandTone = tone;
+    element.dataset.commandRisk = risk;
+    element.style.borderLeftColor = colors.accent;
+  });
+  view.commandDecorations.push(decoration);
+
+  while (view.commandDecorations.length > commandDecorationLimit) {
+    view.commandDecorations.shift()?.dispose();
+  }
+}
+
+function getCommandLineDecorationColors(
+  tone: QuickCommandTone,
+  risk: QuickCommandRisk
+): { background: string; accent: string } {
+  if (risk === "destructive") {
+    return { background: "#2a1a20", accent: "#fb7185" };
+  }
+  if (risk === "caution") {
+    return { background: "#282315", accent: "#f59e0b" };
+  }
+
+  switch (tone) {
+    case "git":
+      return { background: "#142033", accent: "#60a5fa" };
+    case "package":
+      return { background: "#211d31", accent: "#a78bfa" };
+    case "build":
+      return { background: "#24210f", accent: "#fbbf24" };
+    case "filesystem":
+      return { background: "#13261f", accent: "#34d399" };
+    case "network":
+      return { background: "#13242b", accent: "#22d3ee" };
+    case "shell":
+      return { background: "#1e242b", accent: "#cbd5e1" };
+    case "danger":
+      return { background: "#2a1a20", accent: "#fb7185" };
+    case "default":
+      return { background: "#17212b", accent: "#8b949e" };
+  }
 }
 
 async function runCommand(command: QuickCommand): Promise<void> {
@@ -1364,6 +1688,7 @@ async function runCommand(command: QuickCommand): Promise<void> {
   }
 
   if (command.runMode !== "insert") {
+    markExecutedCommandLine(activeTabId, command.command);
     recordCommandIfEligible(activeTabId, command.command).catch((error) => {
       console.warn("Failed to record command history", error);
     });
@@ -2627,6 +2952,7 @@ function handleTerminalInputData(tabId: string, data: string): boolean {
 
   if (data === "\r") {
     const command = state.line;
+    markExecutedCommandLine(tabId, command);
     state.line = "";
     state.cursor = 0;
     state.selectionAnchor = null;
@@ -3553,6 +3879,7 @@ function replaceCurrentLine(tabId: string, command: string, run: boolean): void 
   closeCompletion(tabId);
   window.terminalApi.writeTerminal({ id: tabId, data });
   if (run) {
+    markExecutedCommandLine(tabId, command);
     recordCommandIfEligible(tabId, command).catch((error) => {
       console.warn("Failed to record command history", error);
     });
