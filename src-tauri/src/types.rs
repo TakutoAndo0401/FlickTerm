@@ -180,6 +180,14 @@ pub struct CompletionRequest {
     pub cwd: Option<String>,
     pub token: String,
     pub directories_only: bool,
+    pub source: Option<CompletionSource>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompletionSource {
+    Filesystem,
+    GitLocalBranches,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -187,6 +195,7 @@ pub struct CompletionRequest {
 pub enum CompletionKind {
     File,
     Directory,
+    Branch,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

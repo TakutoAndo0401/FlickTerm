@@ -9,6 +9,7 @@ import type {
   AppSettingsSnapshot,
   CommandHistoryEntry,
   CompletionItem,
+  CompletionSource,
   CursorStyle,
   FeatureSettings,
   QuickCommand,
@@ -97,6 +98,7 @@ type CompletionTarget = {
   tokenStart: number;
   tokenEnd: number;
   directoriesOnly: boolean;
+  source: CompletionSource;
 };
 
 const tabsElement = getElement("tabs");
@@ -462,7 +464,7 @@ const commandPanelWidthMin = 120;
 const commandPanelWidthMax = 360;
 const commandPanelKeyboardStep = 10;
 const historySearchResultLimit = 8;
-const completionResultLimit = 8;
+const completionResultLimit = 80;
 const sessionSerializeScrollback = 1000;
 const sessionSaveDebounceMs = 2000;
 const closedTabsLimit = 10;
@@ -3260,7 +3262,8 @@ async function openCompletion(tabId: string): Promise<void> {
   const items = await window.terminalApi.listCompletions({
     cwd: view.metadata.cwd,
     token: target.token,
-    directoriesOnly: target.directoriesOnly
+    directoriesOnly: target.directoriesOnly,
+    source: target.source
   });
   const limitedItems = items.slice(0, completionResultLimit);
   if (limitedItems.length === 0) {
@@ -3304,18 +3307,32 @@ function getCompletionTarget(line: string, cursor: number): CompletionTarget | n
   const token = tokenMatch[1] ?? "";
   const tokenStart = beforeCursor.length - token.length;
   const command = getCurrentCommandName(line);
+  const source = getCompletionSource(beforeCursor, tokenStart);
   const slashIndex = token.lastIndexOf("/");
   return {
     token,
     tokenDirectoryPrefix: slashIndex === -1 ? "" : token.slice(0, slashIndex + 1),
     tokenStart,
     tokenEnd: cursor,
-    directoriesOnly: command === "cd"
+    directoriesOnly: source === "filesystem" && command === "cd",
+    source
   };
 }
 
 function getCurrentCommandName(line: string): string {
   return line.trimStart().split(/\s+/, 1)[0] ?? "";
+}
+
+function getCompletionSource(beforeCursor: string, tokenStart: number): CompletionSource {
+  const beforeToken = beforeCursor.slice(0, tokenStart).trim();
+  const words = beforeToken.length === 0 ? [] : beforeToken.split(/\s+/);
+  if (words.length === 1 && (words[0] === "gc" || words[0] === "gco")) {
+    return "gitLocalBranches";
+  }
+  if (words.length === 2 && words[0] === "git" && (words[1] === "checkout" || words[1] === "switch")) {
+    return "gitLocalBranches";
+  }
+  return "filesystem";
 }
 
 function renderCompletion(tabId: string): void {
@@ -3349,13 +3366,13 @@ function renderCompletion(tabId: string): void {
 
     const icon = document.createElement("span");
     icon.className = "completion-icon";
-    icon.textContent = item.kind === "directory" ? "d" : "f";
+    icon.textContent = getCompletionIcon(item);
     const name = document.createElement("span");
     name.className = "completion-name";
     name.textContent = item.display;
     const kind = document.createElement("span");
     kind.className = "completion-kind";
-    kind.textContent = item.kind === "directory" ? "Directory" : "File";
+    kind.textContent = getCompletionKindLabel(item);
     button.append(icon, name, kind);
     state.completionResults.append(button);
   }
@@ -3368,7 +3385,7 @@ function renderCompletion(tabId: string): void {
     title.textContent = selected.display;
     const subtitle = document.createElement("div");
     subtitle.className = "completion-detail-subtitle";
-    subtitle.textContent = selected.kind === "directory" ? "Directory" : "File";
+    subtitle.textContent = getCompletionKindLabel(selected);
     state.completionDetail.append(title, subtitle);
   }
 
@@ -3377,10 +3394,12 @@ function renderCompletion(tabId: string): void {
   const lineStart = view.terminal.buffer.active.cursorX - state.cursor;
   const top = origin.top + (view.terminal.buffer.active.cursorY + 1) * cell.height + 4;
   const panelWidth = Math.min(520, Math.max(260, view.element.clientWidth - 24));
+  const panelMaxHeight = Math.min(360, Math.max(160, view.element.clientHeight - 24));
   const left = origin.left + (lineStart + state.completion.tokenStart) * cell.width;
   state.completionPanel.style.width = `${panelWidth}px`;
   state.completionPanel.style.left = `${clamp(left, 8, Math.max(8, view.element.clientWidth - panelWidth - 8))}px`;
-  state.completionPanel.style.top = `${Math.max(8, Math.min(top, view.element.clientHeight - 244))}px`;
+  state.completionPanel.style.top = `${Math.max(8, Math.min(top, view.element.clientHeight - panelMaxHeight - 8))}px`;
+  state.completionResults.style.maxHeight = `${panelMaxHeight}px`;
   state.completionPanel.classList.add("is-open");
 }
 
@@ -3413,7 +3432,28 @@ function applyCompletionItem(
   target: Pick<CompletionTarget, "tokenDirectoryPrefix" | "tokenStart" | "tokenEnd">,
   item: CompletionItem
 ): void {
-  replaceCurrentLineRange(tabId, target.tokenStart, target.tokenEnd, `${target.tokenDirectoryPrefix}${item.insertText}`);
+  const prefix = item.kind === "branch" ? "" : target.tokenDirectoryPrefix;
+  replaceCurrentLineRange(tabId, target.tokenStart, target.tokenEnd, `${prefix}${item.insertText}`);
+}
+
+function getCompletionIcon(item: CompletionItem): string {
+  if (item.kind === "directory") {
+    return "d";
+  }
+  if (item.kind === "branch") {
+    return "b";
+  }
+  return "f";
+}
+
+function getCompletionKindLabel(item: CompletionItem): string {
+  if (item.kind === "directory") {
+    return "Directory";
+  }
+  if (item.kind === "branch") {
+    return "Branch";
+  }
+  return "File";
 }
 
 function closeCompletion(tabId: string): void {

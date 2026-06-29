@@ -10,6 +10,7 @@ use settings::SettingsStore;
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
     sync::Arc,
 };
 use tauri::{Manager, State};
@@ -17,7 +18,7 @@ use terminal::PtyManager;
 use terminal_sessions::TerminalSessionsStore;
 use types::{
     AppSettings, AppSettingsSnapshot, CommandHistoryEntry, CommandHistoryRecordRequest,
-    CompletionItem, CompletionKind, CompletionRequest, CreateTerminalRequest,
+    CompletionItem, CompletionKind, CompletionRequest, CompletionSource, CreateTerminalRequest,
     CreateTerminalResponse, QuickCommand, TerminalKillRequest, TerminalResizeRequest,
     TerminalSessionsSnapshot, TerminalWriteRequest,
 };
@@ -140,6 +141,11 @@ fn completions_list(request: CompletionRequest) -> Result<Vec<CompletionItem>, S
         .filter(|path| path.is_dir())
         .or_else(dirs::home_dir)
         .ok_or_else(|| "Home directory was not found.".to_string())?;
+
+    if matches!(request.source, Some(CompletionSource::GitLocalBranches)) {
+        return list_git_local_branch_completions(&cwd, &request.token);
+    }
+
     let (directory, prefix) = resolve_completion_directory(&cwd, &request.token)?;
     let entries = fs::read_dir(&directory).map_err(|error| error.to_string())?;
     let show_hidden = prefix.starts_with('.');
@@ -189,6 +195,45 @@ fn completions_list(request: CompletionRequest) -> Result<Vec<CompletionItem>, S
             .to_lowercase()
             .cmp(&right.name.to_lowercase())
             .then_with(|| left.name.cmp(&right.name)),
+    });
+    items.truncate(MAX_COMPLETION_RESULTS);
+    Ok(items)
+}
+
+fn list_git_local_branch_completions(
+    cwd: &Path,
+    token: &str,
+) -> Result<Vec<CompletionItem>, String> {
+    let prefix = unescape_shell_token(token);
+    let output = match Command::new("git")
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+        .current_dir(cwd)
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let mut items = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|branch| !branch.is_empty() && branch.starts_with(&prefix))
+        .map(|branch| CompletionItem {
+            insert_text: shell_escape_path_component(branch),
+            display: branch.to_string(),
+            name: branch.to_string(),
+            kind: CompletionKind::Branch,
+        })
+        .collect::<Vec<_>>();
+
+    items.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.name.cmp(&right.name))
     });
     items.truncate(MAX_COMPLETION_RESULTS);
     Ok(items)

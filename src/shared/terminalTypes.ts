@@ -104,12 +104,15 @@ export type TerminalKillRequest = {
   id: string;
 };
 
-export type CompletionKind = "file" | "directory";
+export type CompletionSource = "filesystem" | "gitLocalBranches";
+
+export type CompletionKind = "file" | "directory" | "branch";
 
 export type CompletionRequest = {
   cwd?: string;
   token: string;
   directoriesOnly: boolean;
+  source: CompletionSource;
 };
 
 export type CompletionItem = {
