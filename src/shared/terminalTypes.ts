@@ -104,15 +104,25 @@ export type TerminalKillRequest = {
   id: string;
 };
 
-export type CompletionSource = "filesystem" | "gitLocalBranches";
+export type CompletionSource =
+  | "filesystem"
+  | "gitLocalBranches"
+  | "gitRemoteBranches"
+  | "gitRefs"
+  | "gitTags"
+  | "gitRemotes"
+  | "gitStashes";
 
-export type CompletionKind = "file" | "directory" | "branch";
+export type CompletionKind = "file" | "directory" | "branch" | "tag" | "remote" | "stash";
 
 export type CompletionRequest = {
   cwd?: string;
+  shell?: string;
   token: string;
+  commandPrefix?: string;
   directoriesOnly: boolean;
   source: CompletionSource;
+  remote?: string;
 };
 
 export type CompletionItem = {

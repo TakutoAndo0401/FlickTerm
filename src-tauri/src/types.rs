@@ -178,9 +178,12 @@ pub struct TerminalKillRequest {
 #[serde(rename_all = "camelCase")]
 pub struct CompletionRequest {
     pub cwd: Option<String>,
+    pub shell: Option<String>,
     pub token: String,
+    pub command_prefix: Option<String>,
     pub directories_only: bool,
     pub source: Option<CompletionSource>,
+    pub remote: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -188,6 +191,11 @@ pub struct CompletionRequest {
 pub enum CompletionSource {
     Filesystem,
     GitLocalBranches,
+    GitRemoteBranches,
+    GitRefs,
+    GitTags,
+    GitRemotes,
+    GitStashes,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -196,6 +204,9 @@ pub enum CompletionKind {
     File,
     Directory,
     Branch,
+    Tag,
+    Remote,
+    Stash,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

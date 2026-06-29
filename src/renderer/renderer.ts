@@ -94,11 +94,18 @@ type CompletionPopupState = {
 
 type CompletionTarget = {
   token: string;
+  commandPrefix: string;
   tokenDirectoryPrefix: string;
   tokenStart: number;
   tokenEnd: number;
   directoriesOnly: boolean;
   source: CompletionSource;
+  remote?: string;
+};
+
+type CompletionRouting = {
+  source: CompletionSource;
+  remote?: string;
 };
 
 const tabsElement = getElement("tabs");
@@ -3261,9 +3268,12 @@ async function openCompletion(tabId: string): Promise<void> {
 
   const items = await window.terminalApi.listCompletions({
     cwd: view.metadata.cwd,
+    shell: view.metadata.shell,
     token: target.token,
+    commandPrefix: target.commandPrefix,
     directoriesOnly: target.directoriesOnly,
-    source: target.source
+    source: target.source,
+    remote: target.remote
   });
   const limitedItems = items.slice(0, completionResultLimit);
   if (limitedItems.length === 0) {
@@ -3307,15 +3317,18 @@ function getCompletionTarget(line: string, cursor: number): CompletionTarget | n
   const token = tokenMatch[1] ?? "";
   const tokenStart = beforeCursor.length - token.length;
   const command = getCurrentCommandName(line);
-  const source = getCompletionSource(beforeCursor, tokenStart);
+  const routing = getCompletionRouting(beforeCursor, tokenStart);
+  const commandPrefix = beforeCursor.slice(0, tokenStart);
   const slashIndex = token.lastIndexOf("/");
   return {
     token,
+    commandPrefix,
     tokenDirectoryPrefix: slashIndex === -1 ? "" : token.slice(0, slashIndex + 1),
     tokenStart,
     tokenEnd: cursor,
-    directoriesOnly: source === "filesystem" && command === "cd",
-    source
+    directoriesOnly: routing.source === "filesystem" && command === "cd",
+    source: routing.source,
+    remote: routing.remote
   };
 }
 
@@ -3323,16 +3336,89 @@ function getCurrentCommandName(line: string): string {
   return line.trimStart().split(/\s+/, 1)[0] ?? "";
 }
 
-function getCompletionSource(beforeCursor: string, tokenStart: number): CompletionSource {
+function getCompletionRouting(beforeCursor: string, tokenStart: number): CompletionRouting {
   const beforeToken = beforeCursor.slice(0, tokenStart).trim();
   const words = beforeToken.length === 0 ? [] : beforeToken.split(/\s+/);
-  if (words.length === 1 && (words[0] === "gc" || words[0] === "gco")) {
-    return "gitLocalBranches";
+  if (words[0] !== "git" || !words[1]) {
+    return { source: "filesystem" };
   }
-  if (words.length === 2 && words[0] === "git" && (words[1] === "checkout" || words[1] === "switch")) {
-    return "gitLocalBranches";
+
+  const subcommand = words[1];
+  const args = words.slice(2);
+  const positionalArgs = getGitPositionalArgs(args);
+
+  if ((subcommand === "checkout" || subcommand === "switch") && positionalArgs.length === 0 && !args.includes("--")) {
+    return { source: "gitLocalBranches" };
   }
-  return "filesystem";
+
+  if (subcommand === "branch" && args.some(isGitBranchDeleteOption)) {
+    return { source: "gitLocalBranches" };
+  }
+
+  if (["merge", "rebase", "cherry-pick", "reset", "log", "show", "diff"].includes(subcommand) && positionalArgs.length === 0) {
+    return { source: "gitRefs" };
+  }
+
+  if (subcommand === "tag" && args.some(isGitDeleteOption)) {
+    return { source: "gitTags" };
+  }
+
+  if (subcommand === "remote" && shouldCompleteGitRemote(args, positionalArgs)) {
+    return { source: "gitRemotes" };
+  }
+
+  if (subcommand === "stash" && shouldCompleteGitStash(args, positionalArgs)) {
+    return { source: "gitStashes" };
+  }
+
+  if ((subcommand === "fetch" || subcommand === "pull") && positionalArgs.length === 0) {
+    return { source: "gitRemotes" };
+  }
+
+  if ((subcommand === "fetch" || subcommand === "pull") && positionalArgs.length === 1) {
+    return { source: "gitRemoteBranches", remote: positionalArgs[0] };
+  }
+
+  if (subcommand === "push" && positionalArgs.length === 0) {
+    return { source: "gitRemotes" };
+  }
+
+  if (subcommand === "push" && positionalArgs.length === 1) {
+    return { source: args.some(isGitDeleteOption) ? "gitRemoteBranches" : "gitLocalBranches", remote: positionalArgs[0] };
+  }
+
+  return { source: "filesystem" };
+}
+
+function getGitPositionalArgs(args: string[]): string[] {
+  return args.filter((arg) => !arg.startsWith("-"));
+}
+
+function isGitDeleteOption(arg: string): boolean {
+  return arg === "-d" || arg === "-D" || arg === "--delete";
+}
+
+function isGitBranchDeleteOption(arg: string): boolean {
+  return isGitDeleteOption(arg);
+}
+
+function shouldCompleteGitRemote(args: string[], positionalArgs: string[]): boolean {
+  const action = args[0];
+  if (!action || positionalArgs.length !== 1) {
+    return false;
+  }
+  return ["get-url", "prune", "remove", "rename", "rm", "set-head", "set-url", "show"].includes(action);
+}
+
+function shouldCompleteGitStash(args: string[], positionalArgs: string[]): boolean {
+  const action = args[0];
+  if (!action) {
+    return false;
+  }
+  if (["apply", "branch", "drop", "pop", "show"].includes(action)) {
+    return action === "branch" ? positionalArgs.length >= 2 : positionalArgs.length === 1;
+  }
+  return false;
 }
 
 function renderCompletion(tabId: string): void {
@@ -3432,7 +3518,7 @@ function applyCompletionItem(
   target: Pick<CompletionTarget, "tokenDirectoryPrefix" | "tokenStart" | "tokenEnd">,
   item: CompletionItem
 ): void {
-  const prefix = item.kind === "branch" ? "" : target.tokenDirectoryPrefix;
+  const prefix = item.kind === "file" || item.kind === "directory" ? target.tokenDirectoryPrefix : "";
   replaceCurrentLineRange(tabId, target.tokenStart, target.tokenEnd, `${prefix}${item.insertText}`);
 }
 
@@ -3443,6 +3529,15 @@ function getCompletionIcon(item: CompletionItem): string {
   if (item.kind === "branch") {
     return "b";
   }
+  if (item.kind === "tag") {
+    return "t";
+  }
+  if (item.kind === "remote") {
+    return "r";
+  }
+  if (item.kind === "stash") {
+    return "s";
+  }
   return "f";
 }
 
@@ -3452,6 +3547,15 @@ function getCompletionKindLabel(item: CompletionItem): string {
   }
   if (item.kind === "branch") {
     return "Branch";
+  }
+  if (item.kind === "tag") {
+    return "Tag";
+  }
+  if (item.kind === "remote") {
+    return "Remote";
+  }
+  if (item.kind === "stash") {
+    return "Stash";
   }
   return "File";
 }
