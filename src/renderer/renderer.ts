@@ -2859,11 +2859,31 @@ function handleCompletionKeyEvent(tabId: string, event: KeyboardEvent): boolean 
 
 function handleLineEditingKeyEvent(tabId: string, event: KeyboardEvent): boolean {
   const state = inputStates.get(tabId);
-  if (!state || !isInputAssistanceAvailable(tabId)) {
+  if (!state) {
     return false;
   }
 
   const key = event.key;
+
+  if (event.metaKey && !event.ctrlKey && !event.altKey && key.toLowerCase() === "v") {
+    event.preventDefault();
+    tabs.get(tabId)?.terminal.focus();
+    pasteIntoCurrentLine(tabId).catch((error) => {
+      console.warn("Failed to paste into current line", error);
+    });
+    return true;
+  }
+
+  if (key === "Enter" && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    event.preventDefault();
+    insertMultilineInputBreak(tabId);
+    return true;
+  }
+
+  if (!isInputAssistanceAvailable(tabId)) {
+    return false;
+  }
+
   if (event.metaKey && !event.ctrlKey && !event.altKey && key.toLowerCase() === "a") {
     event.preventDefault();
     const previousCursor = state.cursor;
@@ -2890,14 +2910,6 @@ function handleLineEditingKeyEvent(tabId: string, event: KeyboardEvent): boolean
       return true;
     }
     return false;
-  }
-
-  if (event.metaKey && !event.ctrlKey && !event.altKey && key.toLowerCase() === "v") {
-    event.preventDefault();
-    pasteIntoCurrentLine(tabId).catch((error) => {
-      console.warn("Failed to paste into current line", error);
-    });
-    return true;
   }
 
   if (key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
@@ -2994,6 +3006,17 @@ function handleTerminalInputData(tabId: string, data: string): boolean {
     return false;
   }
 
+  if (isMultilineTerminalData(data)) {
+    const trailingLine = getTrailingInputLine(data);
+    state.line = trailingLine;
+    state.cursor = trailingLine.length;
+    state.selectionAnchor = null;
+    state.inputReliable = true;
+    state.dismissedSuggestionFor = "";
+    clearInputAssistanceUi(tabId, state);
+    return false;
+  }
+
   if (data === "\x7f") {
     if (hasLineSelection(state)) {
       replaceCurrentLineRange(tabId, getSelectionStart(state), getSelectionEnd(state), "");
@@ -3077,6 +3100,9 @@ function isInputAssistanceAvailable(tabId: string): boolean {
     return false;
   }
   if (isTabInAlternateBuffer(tabId)) {
+    return false;
+  }
+  if (hasTerminalLineBreak(state.line)) {
     return false;
   }
 
@@ -3167,6 +3193,34 @@ function replaceCurrentLineRange(tabId: string, start: number, end: number, repl
   updateSuggestion(tabId);
 }
 
+function insertMultilineInputBreak(tabId: string): void {
+  const state = inputStates.get(tabId);
+  const view = tabs.get(tabId);
+  if (!state || !view || activeHistorySearch?.tabId === tabId || activeTerminalSearchTabId === tabId || isTabInAlternateBuffer(tabId)) {
+    return;
+  }
+
+  let data = "\x16\n";
+  if (hasLineSelection(state) && !hasTerminalLineBreak(state.line)) {
+    const start = getSelectionStart(state);
+    const end = getSelectionEnd(state);
+    data = `${cursorMovementData(state.cursor, end)}${"\x7f".repeat(end - start)}${data}`;
+    state.line = `${state.line.slice(0, start)}\n${state.line.slice(end)}`;
+    state.cursor = start + 1;
+  } else {
+    state.line = `${state.line.slice(0, state.cursor)}\n${state.line.slice(state.cursor)}`;
+    state.cursor += 1;
+  }
+  state.selectionAnchor = null;
+  state.inputReliable = true;
+  state.dismissedSuggestionFor = "";
+  clearInputAssistanceUi(tabId, state);
+
+  // Ctrl+V + LF asks common shell editors to insert a literal newline instead of executing.
+  window.terminalApi.writeTerminal({ id: tabId, data });
+  view.terminal.focus();
+}
+
 function cursorMovementData(from: number, to: number): string {
   const delta = to - from;
   if (delta < 0) {
@@ -3207,18 +3261,62 @@ async function copyLineSelection(state: TerminalInputState): Promise<void> {
 }
 
 async function pasteIntoCurrentLine(tabId: string): Promise<void> {
-  const text = normalizeSingleLinePaste(await navigator.clipboard.readText());
+  const clipboardText = await navigator.clipboard.readText();
   const state = inputStates.get(tabId);
-  if (!state) {
+  const view = tabs.get(tabId);
+  if (!state || !view) {
     return;
   }
+  view.terminal.focus();
+
+  if (hasTerminalLineBreak(clipboardText) && !hasLineSelection(state)) {
+    const data = normalizeMultilineTerminalInput(clipboardText);
+    const trailingLine = getTrailingInputLine(data);
+    state.line = trailingLine;
+    state.cursor = trailingLine.length;
+    state.selectionAnchor = null;
+    state.inputReliable = true;
+    state.dismissedSuggestionFor = "";
+    clearInputAssistanceUi(tabId, state);
+    window.terminalApi.writeTerminal({ id: tabId, data });
+    view.terminal.focus();
+    return;
+  }
+
+  const text = normalizeSingleLinePaste(clipboardText);
   const start = hasLineSelection(state) ? getSelectionStart(state) : state.cursor;
   const end = hasLineSelection(state) ? getSelectionEnd(state) : state.cursor;
   replaceCurrentLineRange(tabId, start, end, text);
+  view.terminal.focus();
 }
 
 function normalizeSingleLinePaste(value: string): string {
   return value.replaceAll(/\r\n|\r|\n/g, " ");
+}
+
+function normalizeMultilineTerminalInput(value: string): string {
+  return value.replaceAll(/\r\n|\r|\n/g, "\r");
+}
+
+function isMultilineTerminalData(data: string): boolean {
+  return hasTerminalLineBreak(data) && !data.includes("\x1b");
+}
+
+function hasTerminalLineBreak(value: string): boolean {
+  return /[\r\n]/.test(value);
+}
+
+function getTrailingInputLine(data: string): string {
+  const normalized = normalizeMultilineTerminalInput(data);
+  const lastBreak = normalized.lastIndexOf("\r");
+  return lastBreak === -1 ? normalized : normalized.slice(lastBreak + 1);
+}
+
+function clearInputAssistanceUi(tabId: string, state: TerminalInputState): void {
+  state.suggestion = null;
+  hideSuggestion(state);
+  hideLineSelection(state);
+  closeCompletion(tabId);
 }
 
 function renderLineSelection(tabId: string): void {
@@ -3580,7 +3678,7 @@ async function recordCommandIfEligible(tabId: string, rawCommand: string): Promi
   }
 
   const command = rawCommand.trimEnd();
-  if (command.trim().length === 0 || command.startsWith(" ") || isTabInAlternateBuffer(tabId)) {
+  if (command.trim().length === 0 || command.startsWith(" ") || hasTerminalLineBreak(command) || isTabInAlternateBuffer(tabId)) {
     return;
   }
 
@@ -3619,6 +3717,7 @@ function updateSuggestion(tabId: string): void {
     state.line.length === 0 ||
     state.cursor !== state.line.length ||
     !state.inputReliable ||
+    hasTerminalLineBreak(state.line) ||
     hasLineSelection(state) ||
     state.completion !== null ||
     state.dismissedSuggestionFor === state.line ||
