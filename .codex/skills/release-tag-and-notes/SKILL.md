@@ -6,13 +6,15 @@ description: Git のリリースタグを決定・作成・push し、GitHub Rel
 
 ## 概要
 
-現在のブランチと既存タグを確認し、次のリリースタグを注釈付きタグとして作成して `origin` に push する。その後、直前タグとの差分から GitHub Release notes を整理して作成または更新する。
+現在のブランチと既存タグを確認し、次のリリースバージョンを決める。バージョン定義ファイルを新バージョンに更新してコミット・push したうえで、そのコミットに注釈付きタグを作成して `origin` に push する。その後、直前タグとの差分から GitHub Release notes を整理して作成または更新する。
 
 ## 前提
 
 - 対象は現在の Git リポジトリ。
 - リモートは原則 `origin`。
 - GitHub Release の操作は `gh release` を使う。
+- バージョン定義は `package.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` の 4 ファイルにあり、`scripts/release-version.mjs`（`pnpm version:set` / `pnpm version:check`）でまとめて更新・検証する。
+- タグとバージョン定義が一致していないと Release ワークフロー（`.github/workflows/release.yml`）の「Verify version matches tag」ステップで失敗する。タグだけを先行させる運用は行わない。
 - `.git` への書き込み、タグ push、GitHub API への接続で sandbox 制限やネットワーク制限に当たる場合は、同じコマンドを `require_escalated` で再実行する。
 
 ## 手順
@@ -26,14 +28,15 @@ git status --short --branch
 git remote -v
 git tag --sort=-v:refname
 git log --oneline --decorate -n 12
-rg '"version"|^version =' package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
+pnpm version:check
 ```
 
 確認ポイント:
 
 - 作業ツリーに未コミット変更がある場合、リリースタグ対象に含めるべきかユーザーに確認する。勝手にコミットや破棄をしない。
 - `HEAD` と `origin/<branch>` がずれている場合、タグを打つ対象コミットを確認する。
-- バージョンファイルと最新タグがずれている場合はユーザーへ明示する。ただし、既存運用でタグのみ先行している場合は、タグ作成だけで進めてよい。
+- `pnpm version:check`（引数なし）は 4 ファイルのバージョンが互いに一致しているかを確認する。ずれている場合は原因を確認し、ユーザーへ明示する。
+- 現在のバージョン定義が最新タグより古い場合（例: ファイルは `0.2.2`、最新タグは `v0.2.18`）は、次タグのバージョンへ一気に更新して揃える。
 
 ### 2. 次のタグを決める
 
@@ -46,7 +49,30 @@ rg '"version"|^version =' package.json src-tauri/Cargo.toml src-tauri/tauri.conf
 
 タグ形式は既存タグに合わせる。`v` prefix が既存にあるなら `v0.2.5` のように付ける。
 
-### 3. タグ範囲を確認する
+### 3. バージョン定義を更新してコミット・push する
+
+タグを作成する前に、必ずバージョン定義を新バージョンへ更新する。
+
+```bash
+pnpm version:set <X.Y.Z>
+pnpm version:check <X.Y.Z>
+git diff --stat
+```
+
+`pnpm version:set` は `package.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を同時に書き換える。`git diff` でこの 4 ファイルだけが変わっていることを確認したら、リリースコミットとして単独でコミットし、push する。
+
+```bash
+git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
+git commit -m "chore(release): v<X.Y.Z>"
+git push origin <branch>
+```
+
+確認ポイント:
+
+- 他の変更をリリースコミットに混ぜない。
+- 既にバージョン定義が新バージョンになっている場合（別コミットで更新済み）は、`pnpm version:check <X.Y.Z>` が通ることを確認して次へ進む。
+
+### 4. タグ範囲を確認する
 
 Release notes の対象差分を確認する。
 
@@ -57,7 +83,9 @@ git diff --stat <previous-tag>..<new-tag-or-HEAD>
 
 タグ作成前なら `<new-tag-or-HEAD>` は `HEAD` でよい。タグ作成後は新タグ名で再確認する。
 
-### 4. 注釈付きタグを作成する
+### 5. 注釈付きタグを作成する
+
+タグはリリースコミット（`chore(release): v<X.Y.Z>`）またはそれ以降のコミットに付ける。作成直前に `pnpm version:check <X.Y.Z>` が通ることを再確認する。
 
 ```bash
 git tag -a <new-tag> -m "Release <new-tag>"
@@ -70,7 +98,7 @@ git for-each-ref refs/tags/<new-tag> --format '%(refname:short) %(objecttype) %(
 - `unable to create temporary file` や `unable to write tag file` は `.git` 書き込み制限の可能性が高い。同じ `git tag` コマンドを権限付きで再実行する。
 - タグが既に存在する場合、上書きしない。既存タグの向き先を確認してユーザーに報告する。
 
-### 5. タグを push する
+### 6. タグを push する
 
 ```bash
 git push origin <new-tag>
@@ -78,7 +106,7 @@ git push origin <new-tag>
 
 push 成功後、remote 側の rule bypass メッセージが出ても `new tag` として反映されていれば成功として扱う。
 
-### 6. Release notes を作る
+### 7. Release notes を作る
 
 直前タグから新タグまでのコミットをもとに、ユーザー向けの対応内容に整理する。
 
@@ -109,7 +137,7 @@ push 成功後、remote 側の rule bypass メッセージが出ても `new tag`
 
 コミット一覧をそのまま貼るだけで終わらせず、対応内容を先に要約する。
 
-### 7. GitHub Release を作成または更新する
+### 8. GitHub Release を作成または更新する
 
 まず現在の Release を確認する。
 
@@ -131,7 +159,7 @@ gh release create <new-tag> --repo <owner>/<repo> --title "<new-tag>" --notes '<
 
 `gh release view` がネットワーク制限で失敗した場合は、権限付きで再実行する。`gh` 認証が切れている場合は、認証が必要なことをユーザーに伝える。
 
-### 8. 反映確認
+### 9. 反映確認
 
 更新後に必ず GitHub 側の本文を再取得して確認する。
 
@@ -142,6 +170,7 @@ git status --short --branch
 
 最後の報告には以下を含める。
 
+- 更新したバージョンとリリースコミット
 - 作成・push したタグ名
 - 対象コミット
 - Release URL
@@ -150,6 +179,7 @@ git status --short --branch
 
 ## 注意事項
 
+- タグとバージョン定義（`package.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json`）は必ず一致させる。バージョン更新を省略してタグだけを作成しない。
 - `git tag -f` や既存タグの移動は、ユーザーが明示的に依頼しない限り行わない。
 - 未コミット変更を勝手に含めない。
 - Release notes の本文に AI ツール名や生成元を入れない。

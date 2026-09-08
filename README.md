@@ -38,12 +38,20 @@ pnpm build
 
 Artifacts are written to `src-tauri/target/release/bundle/macos/`.
 
+### Release a new version
+
+Bump every version file at once, commit the bump, then tag that commit:
+
 ```sh
-git tag v0.1.0
+pnpm version:set 0.1.0
+pnpm version:check 0.1.0
+git commit -am "chore(release): v0.1.0"
+git push origin main
+git tag -a v0.1.0 -m "Release v0.1.0"
 git push origin v0.1.0
 ```
 
-Keep `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` versions aligned with the tag. Pushing a version tag publishes macOS artifacts to GitHub Releases.
+`pnpm version:set` updates `package.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json` together; `pnpm version:check` (with or without an expected version) verifies they agree. Pushing a version tag publishes macOS artifacts to GitHub Releases. The Release workflow fails early if the tag does not match the version files, because the in-app updater compares the bundled version with the released one.
 
 ## App Updates
 
@@ -90,3 +98,4 @@ The public key is stored in `src-tauri/tauri.conf.json`. If you generate a new p
 - `src-tauri`: Rust/Tauri app lifecycle, commands, settings, global shortcut plugin setup, and PTY process management.
 - `src/renderer`: Plain HTML/CSS/TypeScript UI, xterm.js rendering, tabs, and quick commands.
 - `src/shared`: Shared TypeScript types for terminal tabs, IPC payloads, and commands.
+- `scripts`: Release helpers (`release-version.mjs` for version bumps/checks, `create-updater-json.mjs` for the updater manifest).

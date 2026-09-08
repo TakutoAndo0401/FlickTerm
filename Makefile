@@ -10,3 +10,4 @@ check:
 	mise exec -- pnpm typecheck
 	mise exec -- pnpm build:renderer
 	mise exec -- cargo test --manifest-path src-tauri/Cargo.toml
+	mise exec -- pnpm version:check
