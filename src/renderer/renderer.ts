@@ -1697,6 +1697,7 @@ async function runCommand(command: QuickCommand): Promise<void> {
   }
 
   if (command.runMode === "confirm" && !(await confirmCommandAction(`Run this command?\n${command.command}`, "Run"))) {
+    focusActiveTerminal();
     return;
   }
 
@@ -1731,6 +1732,15 @@ async function runCommand(command: QuickCommand): Promise<void> {
     id: activeTabId,
     data: command.runMode === "insert" ? command.command : `${command.command}\r`
   });
+  focusActiveTerminal();
+}
+
+function focusActiveTerminal(): void {
+  // A newer confirmation dialog may have replaced the one that just resolved; keep its focus.
+  if (!activeTabId || activeCommandConfirmation) {
+    return;
+  }
+  tabs.get(activeTabId)?.terminal.focus();
 }
 
 function runShortcutAction(actionId: string): void {
