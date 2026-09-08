@@ -1,0 +1,18 @@
+// rulesync.jsonc
+// AI エージェント向けの rules / skills を `.rulesync/` で一元管理し、各ツール向けファイルを生成する。
+// 編集するのは `.rulesync/` 配下だけにし、`pnpm rulesync` で生成物を更新する。
+{
+  "$schema": "https://github.com/dyoshikawa/rulesync/releases/latest/download/config-schema.json",
+
+  // copilot  : .github/copilot-instructions.md, .github/skills/
+  // codexcli : AGENTS.md, .agents/skills/
+  "targets": ["copilot", "codexcli"],
+
+  "features": ["rules", "skills"],
+
+  // 生成前に既存の生成物を削除し、.rulesync/ の内容だけが残るようにする
+  "delete": true,
+
+  // 生成される root ルールの末尾に「日本語で回答する」指示を追加する
+  "language": "ja",
+}

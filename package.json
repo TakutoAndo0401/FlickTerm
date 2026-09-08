@@ -11,7 +11,9 @@
     "build:renderer": "vite build --config vite.config.ts",
     "typecheck": "tsc --noEmit",
     "version:check": "node scripts/release-version.mjs check",
-    "version:set": "node scripts/release-version.mjs set"
+    "version:set": "node scripts/release-version.mjs set",
+    "rulesync": "rulesync generate",
+    "rulesync:check": "rulesync generate --check"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
@@ -29,6 +31,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.3",
     "@types/node": "^26.0.0",
+    "rulesync": "^16.24.1",
     "typescript": "^6.0.3",
     "vite": "^8.1.0"
   }

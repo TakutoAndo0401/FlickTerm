@@ -6,6 +6,7 @@ allowBuilds:
   electron-winstaller: false
   esbuild: true
   node-pty: true
+  tldjs: false
 
 minimumReleaseAgeExclude:
   - electron-to-chromium@1.5.363

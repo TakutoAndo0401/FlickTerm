@@ -99,3 +99,20 @@ The public key is stored in `src-tauri/tauri.conf.json`. If you generate a new p
 - `src/renderer`: Plain HTML/CSS/TypeScript UI, xterm.js rendering, tabs, and quick commands.
 - `src/shared`: Shared TypeScript types for terminal tabs, IPC payloads, and commands.
 - `scripts`: Release helpers (`release-version.mjs` for version bumps/checks, `create-updater-json.mjs` for the updater manifest).
+- `.rulesync`: Source of truth for AI agent rules and skills (see below).
+
+## AI Agent Rules and Skills
+
+Rules and skills for AI coding agents are managed with [rulesync](https://github.com/dyoshikawa/rulesync). Edit only the files under `.rulesync/` and regenerate the tool-specific files:
+
+```sh
+pnpm rulesync        # regenerate
+pnpm rulesync:check  # verify generated files are up to date
+```
+
+| Source | Generated for GitHub Copilot | Generated for Codex CLI |
+| --- | --- | --- |
+| `.rulesync/rules/*.md` | `.github/copilot-instructions.md` | `AGENTS.md` |
+| `.rulesync/skills/*/SKILL.md` | `.github/skills/*/SKILL.md` | `.agents/skills/*/SKILL.md` |
+
+The generated files are committed so that both tools work without running rulesync, but they must not be edited by hand. Targets and options live in `rulesync.jsonc`.
