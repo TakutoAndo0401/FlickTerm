@@ -998,6 +998,9 @@ function attachTerminal(tab: TerminalTab, options: { deferPendingData?: boolean 
     flushPendingTerminalData(tab.id);
   }
   view.terminal.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(tab.id, event));
+  // Capture the native paste event ahead of xterm.js so the text comes from the event itself;
+  // navigator.clipboard.readText() would trigger the WebKit "Paste" permission callout on macOS.
+  view.element.addEventListener("paste", (event) => handleTerminalPasteEvent(tab.id, event), { capture: true });
   view.terminal.onData((data) => {
     if (handleTerminalInputData(tab.id, data)) {
       return;
@@ -2875,15 +2878,6 @@ function handleLineEditingKeyEvent(tabId: string, event: KeyboardEvent): boolean
 
   const key = event.key;
 
-  if (event.metaKey && !event.ctrlKey && !event.altKey && key.toLowerCase() === "v") {
-    event.preventDefault();
-    tabs.get(tabId)?.terminal.focus();
-    pasteIntoCurrentLine(tabId).catch((error) => {
-      console.warn("Failed to paste into current line", error);
-    });
-    return true;
-  }
-
   if (key === "Enter" && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
     event.preventDefault();
     insertMultilineInputBreak(tabId);
@@ -3270,8 +3264,24 @@ async function copyLineSelection(state: TerminalInputState): Promise<void> {
   await navigator.clipboard.writeText(state.line.slice(getSelectionStart(state), getSelectionEnd(state)));
 }
 
-async function pasteIntoCurrentLine(tabId: string): Promise<void> {
-  const clipboardText = await navigator.clipboard.readText();
+function handleTerminalPasteEvent(tabId: string, event: ClipboardEvent): void {
+  const view = tabs.get(tabId);
+  const clipboardText = event.clipboardData?.getData("text/plain") ?? "";
+  if (!view || event.target !== view.terminal.textarea || clipboardText.length === 0) {
+    return;
+  }
+
+  // Full-screen apps and history search keep xterm.js' default (bracketed) paste behavior.
+  if (isSettingsOpen() || activeHistorySearch?.tabId === tabId || isTabInAlternateBuffer(tabId)) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  pasteIntoCurrentLine(tabId, clipboardText);
+}
+
+function pasteIntoCurrentLine(tabId: string, clipboardText: string): void {
   const state = inputStates.get(tabId);
   const view = tabs.get(tabId);
   if (!state || !view) {
@@ -3294,6 +3304,19 @@ async function pasteIntoCurrentLine(tabId: string): Promise<void> {
   }
 
   const text = normalizeSingleLinePaste(clipboardText);
+  if (!isInputAssistanceAvailable(tabId)) {
+    // Line editing helpers are unavailable, so insert at the cursor the same way typed input does.
+    state.line = `${state.line.slice(0, state.cursor)}${text}${state.line.slice(state.cursor)}`;
+    state.cursor += text.length;
+    state.selectionAnchor = null;
+    state.inputReliable = true;
+    state.dismissedSuggestionFor = "";
+    clearInputAssistanceUi(tabId, state);
+    window.terminalApi.writeTerminal({ id: tabId, data: text });
+    view.terminal.focus();
+    return;
+  }
+
   const start = hasLineSelection(state) ? getSelectionStart(state) : state.cursor;
   const end = hasLineSelection(state) ? getSelectionEnd(state) : state.cursor;
   replaceCurrentLineRange(tabId, start, end, text);
